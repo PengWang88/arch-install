@@ -887,10 +887,37 @@ configure_resume() {
 configure_snapshots() {
     info "Configuring Snapper snapshots..."
 
-    # Create snapper config (must use --no-dbus in chroot: no dbus-daemon running)
-    arch-chroot /mnt snapper --no-dbus -c root create-config / || {
-        die "Failed to create snapper config."
-    }
+    # Snapper's create-config expects to create the ".snapshots" subvolume
+    # itself. Our btrfs layout already created the dedicated @snapshots
+    # subvolume and mounted it at /.snapshots, so create-config aborts with
+    # errno 17 (File exists). In that layout we register the config manually
+    # from the default template instead: snapshots then live inside the
+    # existing @snapshots subvolume, exactly as intended. On any other layout
+    # we fall back to snapper's own create-config.
+    # (Must use --no-dbus in chroot: no dbus-daemon is running.)
+    if mountpoint -q /mnt/.snapshots; then
+        arch-chroot /mnt bash -c '
+            set -e
+            mkdir -p /etc/snapper/configs
+            if [ -f /etc/snapper/configs-templates/default ]; then
+                cp /etc/snapper/configs-templates/default /etc/snapper/configs/root
+            else
+                : > /etc/snapper/configs/root
+            fi
+            # Mandatory keys for a btrfs config of "/".
+            sed -i "s|^#\?SUBVOLUME=.*|SUBVOLUME=\"/\"|" /etc/snapper/configs/root
+            grep -q "^SUBVOLUME=" /etc/snapper/configs/root || \
+                printf "SUBVOLUME=\"/\"\n" >> /etc/snapper/configs/root
+            sed -i "s|^#\?FSTYPE=.*|FSTYPE=\"btrfs\"|" /etc/snapper/configs/root
+            grep -q "^FSTYPE=" /etc/snapper/configs/root || \
+                printf "FSTYPE=\"btrfs\"\n" >> /etc/snapper/configs/root
+        ' || die "Failed to create snapper config."
+        info "Snapper config registered for the pre-created @snapshots subvolume (/.snapshots)."
+    else
+        arch-chroot /mnt snapper --no-dbus -c root create-config / || {
+            die "Failed to create snapper config."
+        }
+    fi
 
     # Tune retention policy: keep 10 hourly + 7 daily
     # shellcheck disable=SC2016  # single quotes are intentional: $CFG must be
