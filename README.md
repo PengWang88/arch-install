@@ -57,9 +57,9 @@
 
 自动完成：时区（Asia/Shanghai）、Locale、主机名、用户创建、sudo、NetworkManager、systemd-timesyncd、蓝牙、TLP、休眠 resume（`resume=UUID=…`）、Snapper 定时快照。
 
-### 安装日志
+### 安装日志 / 彩色进度
 
-全程日志写入 `/tmp/arch-install-<时间戳>.log`，失败时自动提示日志路径。
+全程日志写入 `/tmp/arch-install-<时间戳>.log`，失败时自动提示日志路径。终端状态提示自动着色：`[OK ]` 绿、`[INFO]` 青、`[WARN]` 黄、`[FAIL]` 红加粗（仅在交互式终端生效，且不会污染日志文件）；可用 `NO_COLOR=1` 或 `TERM=dumb` 关闭彩色。
 
 ---
 

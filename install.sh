@@ -55,13 +55,58 @@ HOSTNAME="archlinux"
 USERNAME=""
 
 # -----------------------------------------------------------------------------
+# Colored console output
+# -----------------------------------------------------------------------------
+# Color support is decided ONCE at startup, before init_logging() redirects
+# stdout into the log tee: it is enabled only when stdout is a real terminal,
+# TERM is usable, and the standard NO_COLOR opt-out is unset. The ANSI codes
+# pass through the tee to the terminal; the LOG_FILE copy is stripped again on
+# exit so the log stays plain and greppable.
+USE_COLOR=0
+C_RESET=$'\e[0m'
+C_BOLD=$'\e[1m'
+C_RED=$'\e[31m'
+C_GREEN=$'\e[32m'
+C_YELLOW=$'\e[33m'
+C_CYAN=$'\e[36m'
+
+setup_color() {
+    if [[ -t 1 ]] \
+        && [[ "${TERM:-dumb}" != "dumb" ]] \
+        && [[ -z "${NO_COLOR:-}" ]]; then
+        USE_COLOR=1
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
-log()  { local level="$1"; shift; printf '[%-4s] %s\n' "$level" "$*"; }
+log() {
+    local level="$1" tag
+    shift
+    if (( USE_COLOR )); then
+        case "$level" in
+            OK)   tag="${C_GREEN}${C_BOLD}[OK  ]${C_RESET}" ;;
+            INFO) tag="${C_CYAN}[INFO]${C_RESET}" ;;
+            WARN) tag="${C_YELLOW}[WARN]${C_RESET}" ;;
+            FAIL) tag="${C_RED}${C_BOLD}[FAIL]${C_RESET}" ;;
+            *)    tag="[${level}]" ;;
+        esac
+    else
+        printf -v tag '[%-4s]' "$level"
+    fi
+    printf '%s %s\n' "$tag" "$*"
+}
 info() { log "INFO" "$@"; }
 ok()   { log "OK"   "$@"; }
 warn() { log "WARN" "$@"; }
 die()  { log "FAIL" "$@" >&2; exit 1; }
+
+strip_log_colors() {
+    # Remove ANSI SGR sequences written while the console was colorized so the
+    # log file stays readable and greppable.
+    sed -i 's/\x1b\[[0-9;]*m//g' "$LOG_FILE" 2>/dev/null || true
+}
 
 init_logging() {
     touch "$LOG_FILE" || {
@@ -69,6 +114,7 @@ init_logging() {
         exit 1
     }
     exec > >(tee -a "$LOG_FILE") 2>&1
+    trap strip_log_colors EXIT
 }
 
 # -----------------------------------------------------------------------------
@@ -77,15 +123,29 @@ init_logging() {
 on_error() {
     local exit_code=$?
     set +e
-    printf '\n[FAIL] Unexpected error (exit=%d, line=%s)\n' \
-        "$exit_code" \
-        "${BASH_LINENO[0]:-unknown}" >&2
-    printf '[INFO] Log file: %s\n' "$LOG_FILE" >&2
+    if (( USE_COLOR )); then
+        printf '\n%s[FAIL]%s Unexpected error (exit=%d, line=%s)\n' \
+            "${C_RED}${C_BOLD}" "${C_RESET}" \
+            "$exit_code" \
+            "${BASH_LINENO[0]:-unknown}" >&2
+        printf '%s[INFO]%s Log file: %s\n' \
+            "${C_CYAN}" "${C_RESET}" "$LOG_FILE" >&2
+    else
+        printf '\n[FAIL] Unexpected error (exit=%d, line=%s)\n' \
+            "$exit_code" \
+            "${BASH_LINENO[0]:-unknown}" >&2
+        printf '[INFO] Log file: %s\n' "$LOG_FILE" >&2
+    fi
     exit "$exit_code"
 }
 
 on_interrupt() {
-    printf '\n[WARN] Installation interrupted by user.\n' >&2
+    if (( USE_COLOR )); then
+        printf '\n%s[WARN]%s Installation interrupted by user.\n' \
+            "${C_YELLOW}" "${C_RESET}" >&2
+    else
+        printf '\n[WARN] Installation interrupted by user.\n' >&2
+    fi
     exit 130
 }
 
@@ -1004,6 +1064,9 @@ EOF
 # Main
 # -----------------------------------------------------------------------------
 main() {
+    # Decide color support while stdout is still the real terminal (init_logging
+    # redirects it into the log tee right after).
+    setup_color
     init_logging
 
     local version
