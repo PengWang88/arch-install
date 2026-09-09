@@ -227,14 +227,19 @@ setup_mirrors() {
 # Disk selection
 # -----------------------------------------------------------------------------
 get_live_device() {
-    local source
-    source="$( findmnt \
-        -n \
-        -o SOURCE \
-        /run/archiso/airootfs 2>/dev/null || true )"
-    if [[ "$source" == /dev/* ]]; then
-        printf '%s\n' "$source"
-    fi
+    # Report block devices that host the running Arch ISO, if discoverable.
+    # airootfs usually resolves to a loop/overlay device, while bootmnt is the
+    # real USB partition when booting an official ISO from removable media.
+    local mount_point source
+    for mount_point in /run/archiso/airootfs /run/archiso/bootmnt; do
+        source="$( findmnt \
+            -n \
+            -o SOURCE \
+            "$mount_point" 2>/dev/null || true )"
+        if [[ "$source" == /dev/* ]]; then
+            printf '%s\n' "$source"
+        fi
+    done
 }
 
 list_disks() {
@@ -256,14 +261,15 @@ validate_disk() {
 
 is_live_device() {
     local disk="$1"
-    local live_device
-    live_device="$(get_live_device)"
-    [[ -z "$live_device" ]] && return 1
-    [[ "$disk" == "$live_device" ]] && return 0
+    local live_device parent
+    while IFS= read -r live_device; do
+        [[ -n "$live_device" ]] || continue
+        [[ "$disk" == "$live_device" ]] && return 0
 
-    local parent
-    parent="$( lsblk -no PKNAME "$live_device" 2>/dev/null || true )"
-    [[ "$disk" == "/dev/$parent" ]]
+        parent="$( lsblk -no PKNAME "$live_device" 2>/dev/null || true )"
+        [[ -n "$parent" && "$disk" == "/dev/$parent" ]] && return 0
+    done < <(get_live_device)
+    return 1
 }
 
 select_disk() {
@@ -304,8 +310,41 @@ confirm_disk() {
 # -----------------------------------------------------------------------------
 # Partitioning
 # -----------------------------------------------------------------------------
+cleanup_disk_state() {
+    # Make re-runs safe: drop anything left behind by a previous, possibly
+    # failed, run of this installer before touching the target disk.
+    if mountpoint -q /mnt 2>/dev/null; then
+        warn "Unmounting leftover mounts under /mnt from a previous run..."
+        umount -R /mnt 2>/dev/null || true
+    fi
+
+    local swap_dev
+    while read -r swap_dev; do
+        case "$swap_dev" in
+            "$TARGET_DISK"*)
+                warn "Disabling leftover swap on target disk: $swap_dev"
+                swapoff "$swap_dev" 2>/dev/null || true
+                ;;
+        esac
+    done < <( swapon --show | awk 'NR > 1 {print $1}' )
+}
+
+assert_disk_unused() {
+    # Refuse to repartition a disk whose partitions are still mounted/used.
+    local used
+    used="$( { lsblk -no MOUNTPOINTS "$TARGET_DISK" 2>/dev/null || true; } \
+        | awk 'NF' \
+        | tr '\n' ' ' )"
+    used="${used% }"
+    [[ -z "$used" ]] || die "Target disk is still in use: $used"
+}
+
 ask_swap_size() {
     local swap_input
+    local mem_total
+    mem_total="$( free -h | awk '/^Mem:/ {print $2}' )"
+    info "Physical memory: ${mem_total:-unknown}"
+    info "For hibernation, swap should be at least as large as RAM."
     while true; do
         read -rp "Enter swap size (e.g., 8G, 4096M) [default: 8G]: " swap_input
         swap_input="${swap_input:-8G}"
@@ -330,6 +369,9 @@ get_partition_name() {
 }
 
 partition_disk() {
+    cleanup_disk_state
+    assert_disk_unused
+
     ask_swap_size
 
     EFI_PART="$(get_partition_name "$TARGET_DISK" 1)"
@@ -364,7 +406,18 @@ partition_disk() {
         "$TARGET_DISK"
 
     partprobe "$TARGET_DISK"
-    sleep 2
+
+    # Wait until the kernel exposes all partition nodes (NVMe/eMMC can be slow).
+    local attempt
+    for ((attempt = 0; attempt < 20; attempt++)); do
+        if [[ -b "$EFI_PART" && -b "$SWAP_PART" && -b "$ROOT_PART" ]]; then
+            break
+        fi
+        sleep 1
+    done
+    if [[ ! -b "$EFI_PART" || ! -b "$SWAP_PART" || ! -b "$ROOT_PART" ]]; then
+        die "Partition nodes did not appear: $EFI_PART $SWAP_PART $ROOT_PART"
+    fi
 
     mkfs.fat -F32 "$EFI_PART"
     mkswap "$SWAP_PART"
@@ -459,7 +512,7 @@ install_base_system() {
         snapper grub-btrfs inotify-tools
         grub efibootmgr os-prober
         fuse3 ntfs-3g
-        networkmanager iwd
+        networkmanager
         bluez bluez-utils
         pipewire pipewire-pulse wireplumber mesa
         linux-headers git sudo vim base-devel
@@ -521,6 +574,9 @@ HOSTS
 
 # enable network
 systemctl enable NetworkManager
+
+# Enable time synchronization (NetworkManager does not sync the clock itself)
+systemctl enable systemd-timesyncd
 
 # Enable Bluetooth service
 systemctl enable bluetooth
@@ -595,7 +651,7 @@ configure_resume() {
 }
 
 # -----------------------------------------------------------------------------
-# NEW: Snapper + grub-btrfs snapshot configuration
+# Snapper + grub-btrfs snapshot configuration
 # -----------------------------------------------------------------------------
 configure_snapshots() {
     info "Configuring Snapper snapshots..."
