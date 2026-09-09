@@ -9,8 +9,13 @@ readonly PROJECT_NAME="arch-install"
 readonly MIRROR_COUNTRY="${MIRROR_COUNTRY:-CN}"
 readonly MIRROR_AGE="${MIRROR_AGE:-12}"
 readonly MIRROR_PROTOCOL="${MIRROR_PROTOCOL:-https}"
-readonly SCRIPT_DIR="$( cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P )"
-readonly LOG_FILE="/tmp/${PROJECT_NAME}-$(date -u +%Y%m%dT%H%M%SZ).log"
+
+# Declare separately from the command substitution so a failing $(...) still
+# aborts under `set -e` (readonly would otherwise mask its exit status).
+readonly SCRIPT_DIR
+SCRIPT_DIR="$( cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P )"
+readonly LOG_FILE
+LOG_FILE="/tmp/${PROJECT_NAME}-$(date -u +%Y%m%dT%H%M%SZ).log"
 
 TARGET_DISK=""
 EFI_PART=""
@@ -84,10 +89,15 @@ require_command() {
 }
 
 check_commands() {
+    # Tools required in the live (ISO) environment. Commands that only run
+    # inside the chroot (e.g. snapper, grub-install, grub-mkconfig) come from
+    # packages installed by pacstrap and are deliberately not checked here.
     local commands=(
         curl date sleep tee timedatectl uname lsblk blkid findmnt
         sgdisk partprobe mkfs.fat mkswap mkfs.btrfs btrfs free
-        mount umount swapon pacstrap genfstab
+        mount umount mountpoint swapon swapoff
+        pacman pacstrap genfstab arch-chroot
+        sed awk grep sync mkdir cat
     )
     local command_name
     for command_name in "${commands[@]}"; do
@@ -345,7 +355,7 @@ partition_disk() {
         -t 1:ef00 \
         "$TARGET_DISK"
     sgdisk \
-        -n 2:0:+${SWAP_SIZE} \
+        -n 2:0:+"${SWAP_SIZE}" \
         -t 2:8200 \
         "$TARGET_DISK"
     sgdisk \
@@ -596,6 +606,8 @@ configure_snapshots() {
     }
 
     # Tune retention policy: keep 10 hourly + 7 daily
+    # shellcheck disable=SC2016  # single quotes are intentional: $CFG must be
+    #                             # expanded inside the chroot, not by this shell
     arch-chroot /mnt bash -c '
         set -e
         CFG=/etc/snapper/configs/root
@@ -705,9 +717,6 @@ main() {
     install_grub
 
     finish_installation
-
-    printf '\n'
-    ok "Environment checks completed successfully."
 }
 
 main "$@"
