@@ -1,10 +1,13 @@
 # arch-install
 
-一个用于快速部署 Arch Linux 的自动化安装脚本。
+一个用于快速部署 Arch Linux 的自动化安装脚本，适配 **拯救者 Y9000P 2022（Legion）双硬盘 Windows + Arch Linux 双系统** 场景：
 
-本项目基于 Arch Linux 官方安装环境，通过交互式流程完成磁盘分区、系统安装、基础服务配置以及引导安装，目标是在保持 Arch Linux 灵活性的同时，减少重复的手动安装步骤。
+* 一块 NVMe SSD 装 **Windows**（保持原样，脚本**完全不碰**这块盘）
+* 另一块 NVMe SSD 装 **Arch Linux**（脚本只在这块盘上分区/格式化）
 
-> ⚠️ 注意：该脚本会对目标磁盘进行分区和格式化操作，请确认备份重要数据后再使用。
+两块盘各自拥有独立的 EFI 分区和引导程序，互不干扰；开机可按 F12 选盘，或直接进 Arch 的 GRUB 菜单选择 Windows（通过 os-prober 自动检测，只读不改写 Windows 盘）。
+
+> ⚠️ 注意：该脚本会对**所选的目标磁盘**进行分区和格式化操作，请确认备份数据后再使用。选盘时脚本会自动标注哪块盘含有 Windows（NTFS），并要求额外确认，防止误删。
 
 ---
 
@@ -14,102 +17,109 @@
 
 * 支持 UEFI 启动模式
 * 自动检测 Arch Linux 安装环境
-* 自动配置 Arch Linux 镜像源
-* GPT 分区方案
-* 自动创建 EFI 分区
-* 自动创建 Swap 分区
-* 自动创建 Btrfs 根文件系统
+* 自动配置 pacman 镜像源（默认中国区，可用 `MIRROR_COUNTRY` 覆盖）
+* GPT 分区方案，全部落在**目标盘**上：
+  * 1 GiB EFI 分区
+  * Swap 分区（可交互指定大小，休眠建议 ≥ 内存）
+  * Btrfs 根分区
+* 自动识别 / 拒绝：非 UEFI、非官方 ISO、架构不符、目标盘仍被占用等情况
+
+### 双系统 / 双硬盘支持
+
+* 目标盘与 Windows 盘完全隔离：只在目标盘创建 ESP 并安装 GRUB
+* os-prober 自动把 **Windows Boot Manager** 加进 Arch 的 GRUB 菜单（可选关闭，见下方开关）
+* Secure Boot 状态检测与提示（GRUB 未签名，开启时需在 BIOS 关闭）
+* Windows 盘误选防护：检测到盘上有 NTFS/FAT 分区时会醒目警告并要求输入 `ERASE` 才继续
+* 磁盘列表自动标注「哪块盘有 Windows 数据」
+* 装完可选把 Arch 设为第一启动项（也可保持 F12 手动选盘）
+
+### Y9000P 2022 硬件适配（默认开启，均可开关）
+
+* **NVIDIA 独显驱动**：`nvidia nvidia-utils nvidia-settings nvidia-prime`（RTX 3060 / 3070 Ti）
+* 内核参数追加 `nvidia-drm.modeset=1`（混合显卡 KMS / Wayland 需要）
+* 启用 NVIDIA 休眠/挂起服务（`nvidia-suspend` 等）
+* Alder Lake 声卡固件：`sof-firmware` + `alsa-ucm-conf`（已有）
+* Intel 无线/蓝牙：`linux-firmware` + `bluez`（已有）
+* TLP 电源管理（已有）
 
 ### Btrfs 文件系统布局
 
-默认使用 Btrfs 子卷：
-
 ```
 /
-├── @
-├── @home
-└── @snapshots
+├── @             # 根
+├── @home         # 用户目录
+└── @snapshots    # Snapper 快照
 ```
 
-支持：
-
-* 根目录快照
-* 用户目录独立管理
-* Snapper 快照管理
-* grub-btrfs 快照启动
+支持 Snapper 快照管理 + grub-btrfs 从 GRUB 菜单直接启动历史快照。
 
 ### 系统配置
 
-自动完成：
-
-* 时区配置
-* Locale 配置
-* Hostname 设置
-* 用户创建
-* 网络配置
-* NetworkManager 安装
-* Bluetooth 配置
-* TLP 电源管理
-* Hibernate Resume 配置
-
-### 引导配置
-
-自动安装：
-
-* GRUB Bootloader
-* EFI 启动项
-* 快照启动菜单
+自动完成：时区（Asia/Shanghai）、Locale、主机名、用户创建、sudo、NetworkManager、systemd-timesyncd、蓝牙、TLP、休眠 resume（`resume=UUID=…`）、Snapper 定时快照。
 
 ### 安装日志
 
-安装过程会保存日志，方便排查安装问题。
+全程日志写入 `/tmp/arch-install-<时间戳>.log`，失败时自动提示日志路径。
+
+---
+
+## 🔧 可调开关（环境变量，均有默认值）
+
+| 变量 | 默认 | 说明 |
+| ---- | ---- | ---- |
+| `ENABLE_OS_PROBER` | `1` | 在 Arch GRUB 菜单里加入 Windows 入口。`0` = 完全独立，只靠 F12 选盘 |
+| `INSTALL_NVIDIA` | `1` | 安装 NVIDIA 闭源驱动系列包 |
+| `NVIDIA_DRM_MODESET` | `1` | 追加 `nvidia-drm.modeset=1` 内核参数 |
+| `MIRROR_COUNTRY` | `CN` | reflector 镜像源国家 |
+| `MIRROR_AGE` / `MIRROR_PROTOCOL` | `12` / `https` | reflector 参数 |
+
+示例：`ENABLE_OS_PROBER=0 INSTALL_NVIDIA=0 ./install.sh`
 
 ---
 
 ## 📦 系统要求
 
-运行环境：
+* **Windows 先安装并验证好**在盘 A 上（出厂即装好最佳）
+* Arch Linux 官方 ISO（UEFI 方式启动）
+* x86_64 架构、UEFI 启动模式
+* 已连接互联网、以 root 运行
+* 两块 NVMe SSD 均能被系统识别
 
-* Arch Linux 官方 ISO
-* x86_64 架构
-* UEFI 启动模式
-* 已连接互联网
-* root 权限
+---
 
-推荐：
+## 🔧 BIOS / 启动介质准备（Y9000P 2022 必读）
 
-* 单块 SSD / NVMe 磁盘
-* 支持 UEFI 的现代电脑
+1. **关闭 Secure Boot**（F2 进 BIOS → Security / Boot）
+   * 出厂 Win11 默认开启，而 Arch 的 GRUB 未签名，不关则装完无法启动 Arch。
+   * 关闭不影响现有 Windows 启动。
+2. **确认 ISO 里能看到两块 NVMe**
+   * 用 Arch ISO 启动后先执行 `lsblk`。若一块/两块内置 NVMe 都不见，通常是 BIOS 存储模式处于 **Intel VMD / RST**：
+     * 到 BIOS 中把存储模式从 VMD/RST 改为 **AHCI**；
+     * **切换前**必须先让 Windows 适配 AHCI，否则 Windows 会蓝屏：
+       1. Windows 管理员命令行执行 `bcdedit /set {current} safeboot minimal`
+       2. 重启进 BIOS 改 AHCI → 保存重启（会进入安全模式）
+       3. 管理员命令行执行 `bcdedit /deletevalue {current} safeboot`
+       4. 再重启一次，Windows 恢复正常
+3. （可选）BIOS 显卡模式：混合模式（Hybrid）日常更省电；脚本两种模式都兼容。
+
+> 如果 Windows 与 Arch 谁先装：**推荐 Windows 先装**。脚本全程不写 Windows 盘，因此顺序其实不关键。
 
 ---
 
 ## 🚀 使用方法
 
-### 1. 启动 Arch Linux ISO
-
-从 U 盘启动 Arch Linux 安装环境。
-
-确认网络连接：
+### 1. 启动 Arch Linux ISO（UEFI 模式）
 
 ```bash
-ping archlinux.org
+ping archlinux.org   # 确认网络
 ```
-
----
 
 ### 2. 下载安装脚本
 
 ```bash
 curl -O https://raw.githubusercontent.com/PengWang88/arch-install/main/install.sh
-```
-
-添加执行权限：
-
-```bash
 chmod +x install.sh
 ```
-
----
 
 ### 3. 运行安装程序
 
@@ -117,22 +127,52 @@ chmod +x install.sh
 ./install.sh
 ```
 
-根据提示完成：
+按提示完成：
 
-* 磁盘选择
-* 分区确认
-* 用户配置
-* 系统参数设置
-
----
+* 磁盘选择——**对照磁盘列表的自动标注，选「无 Windows 数据」的那块 SSD**（例如 `/dev/nvme1n1`）
+* 若误选到含 Windows 的盘，脚本会要求输入 `ERASE` 才会继续
+* Swap 大小（休眠请给 ≥ 内存大小）
+* 用户名 / 密码
+* 是否把 Arch 设为第一启动项
 
 ### 4. 安装完成后重启
 
-```bash
-reboot
-```
+移除安装 U 盘后重启：
 
-移除安装 U 盘后进入新的 Arch Linux 系统。
+* 若选择了「Arch 设为第一启动项」→ 直接进 GRUB，菜单里有 Arch（含快照项）和 Windows Boot Manager
+* 否则按 **F12** 选盘：`Arch` 进 Arch，`Windows Boot Manager` 进 Windows
+
+---
+
+## ⚙️ 分区方案（仅目标盘）
+
+| 分区 | 文件系统 | 大小 | 用途 |
+| ---- | ---- | ---- | ---- |
+| EFI  | FAT32 | 1 GiB | Arch 自己的 UEFI 引导 |
+| Swap | swap  | 交互指定 | 交换空间 / 休眠（resume=UUID） |
+| Root | Btrfs | 剩余全部 | 系统数据（含 @、@home、@snapshots 子卷） |
+
+---
+
+## 🔧 安装后的系统组件与常用操作
+
+脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager、Bluetooth、TLP、Snapper、grub-btrfs、NVIDIA 驱动、休眠 resume。
+
+```bash
+# 如果 GRUB 菜单里没有 Windows 入口，重新生成一次：
+sudo os-prober && sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+# 独显程序（混合显卡下用核显输出，独显跑负载）：
+prime-run <command>
+
+# 快照：
+sudo snapper list                        # 查看快照
+sudo snapper create -d "Before update"   # 手动快照
+sudo snapper rollback <编号>              # 回滚
+
+# 如果 Windows 与 Arch 时间相差 8 小时（Windows 管理员命令行执行一次）：
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f
+```
 
 ---
 
@@ -140,86 +180,53 @@ reboot
 
 ```
 arch-install
-├── install.sh     # 自动安装脚本
+├── install.sh     # 自动安装脚本（双硬盘双系统适配）
 └── README.md      # 使用说明
 ```
 
 ---
 
-## ⚙️ 分区方案
-
-默认方案：
-
-| 分区   | 文件系统  | 用途        |
-| ---- | ----- | --------- |
-| EFI  | FAT32 | UEFI 引导   |
-| Swap | swap  | 交换空间 / 休眠 |
-| Root | Btrfs | 系统数据      |
-
----
-
-## 🔧 安装后的系统组件
-
-脚本会自动配置：
-
-* Linux Kernel
-* GRUB
-* NetworkManager
-* Bluetooth
-* TLP
-* Snapper
-* grub-btrfs
-
----
-
 ## ❓ 常见问题
+
+### 会动我的 Windows 盘吗？
+
+不会。脚本只分区/格式化**所选目标盘**；Windows 盘连 ESP 都不会被写入。os-prober 对 Windows 盘只做只读检测。唯一的风险是**手动选错盘**——脚本已加双重防护（列表标注 + 二次 `ERASE` 确认）。
+
+### 为什么 Arch 起不来 / "Verification failed"？
+
+Secure Boot 未关闭。参考上文 BIOS 准备第 1 步。
+
+### ISO 里 lsblk 看不到内置 NVMe？
+
+BIOS 存储模式处于 VMD/RST，需切到 AHCI（切换步骤见上，先让 Windows 进安全模式一次）。
+
+### 双系统时间相差 8 小时？
+
+见上文注册表命令（Linux 默认硬件时钟按 UTC 处理）。
+
+### 想让两块盘完全独立、不用 GRUB 菜单选 Windows？
+
+`ENABLE_OS_PROBER=0 ./install.sh`，之后只用 F12 选盘即可。
 
 ### 是否支持 BIOS Legacy 启动？
 
-目前主要面向 UEFI 环境。
-
----
+不支持，仅 UEFI。
 
 ### 是否会清空磁盘？
 
-会。
-
-安装过程中会重新分区目标磁盘，请提前备份数据。
-
----
-
-### 是否支持多系统安装？
-
-默认安装流程针对单系统部署。
-
-如果需要保留已有系统，请自行修改分区方案。
-
----
+会清空**所选目标盘**，请提前备份。
 
 ### 安装失败怎么办？
 
-请检查：
-
-1. 网络是否正常
-2. ISO 是否为最新版本
-3. 是否使用 UEFI 启动
-4. 查看安装日志
+1. 检查网络、ISO 是否最新
+2. 确认 UEFI 启动、Secure Boot 状态
+3. 查看日志（脚本运行时会打印日志路径，也可在失败提示中找到）
 
 ---
 
 ## 📝 免责声明
 
-本项目用于自动化 Arch Linux 安装流程。
-
-由于 Arch Linux 更新频繁，脚本可能受到：
-
-* 软件包变化
-* 官方安装流程变化
-* 硬件差异
-
-影响。
-
-建议在正式使用前先进行测试。
+本项目用于自动化 Arch Linux 安装流程。由于 Arch Linux 更新频繁，脚本可能受到软件包变化、官方安装流程变化、硬件差异影响。建议在正式使用前先进行测试；破坏性操作前务必确认磁盘选择。
 
 ---
 

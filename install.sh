@@ -10,6 +10,23 @@ readonly MIRROR_COUNTRY="${MIRROR_COUNTRY:-CN}"
 readonly MIRROR_AGE="${MIRROR_AGE:-12}"
 readonly MIRROR_PROTOCOL="${MIRROR_PROTOCOL:-https}"
 
+# -----------------------------------------------------------------------------
+# Dual-boot / hardware toggles
+#   Defaults target: Lenovo Legion Y9000P 2022 (12th-gen Intel + RTX 30 series)
+#   with Windows on ONE NVMe SSD and Arch Linux installed on the OTHER SSD.
+#   Each OS keeps its own EFI partition and bootloader on its own disk.
+# -----------------------------------------------------------------------------
+# Add a Windows entry to the Arch GRUB menu via os-prober. os-prober only
+# *detects* the Windows bootloader on the other disk and adds a chainload entry;
+# it never writes to the Windows disk.
+readonly ENABLE_OS_PROBER="${ENABLE_OS_PROBER:-1}"
+# Install the proprietary NVIDIA driver for the RTX dGPU during pacstrap
+# (nvidia / nvidia-utils / nvidia-settings / nvidia-prime).
+readonly INSTALL_NVIDIA="${INSTALL_NVIDIA:-1}"
+# Append nvidia-drm.modeset=1 to the kernel cmdline (early KMS; required by most
+# Wayland/X sessions on hybrid-graphics laptops; harmless for console use).
+readonly NVIDIA_DRM_MODESET="${NVIDIA_DRM_MODESET:-1}"
+
 # Declare separately from the command substitution so a failing $(...) still
 # aborts under `set -e` (readonly would otherwise mask its exit status).
 readonly SCRIPT_DIR
@@ -93,7 +110,7 @@ check_commands() {
     # inside the chroot (e.g. snapper, grub-install, grub-mkconfig) come from
     # packages installed by pacstrap and are deliberately not checked here.
     local commands=(
-        curl date sleep tee timedatectl uname lsblk blkid findmnt
+        curl date sleep tee timedatectl uname lsblk blkid findmnt od
         sgdisk partprobe mkfs.fat mkswap mkfs.btrfs btrfs free
         mount umount mountpoint swapon swapoff
         pacman pacstrap genfstab arch-chroot
@@ -142,6 +159,31 @@ check_uefi() {
         warn "UEFI variables are not available."
         warn "Bootloader installation may require special handling."
     fi
+}
+
+check_secure_boot() {
+    # Arch's GRUB is not signed for Secure Boot. The Y9000P ships (Windows 11
+    # OEM) with Secure Boot enabled; warn early so the user can disable it in
+    # the BIOS before the first boot of the installed system. Disabling Secure
+    # Boot does not affect the existing Windows installation.
+    local efivar="/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+    local state
+    if [[ ! -r "$efivar" ]]; then
+        info "Secure Boot status: unknown (efivar not readable)."
+        return 0
+    fi
+    state="$( od -An -j4 -N1 -t u1 "$efivar" 2>/dev/null | tr -d ' ' )"
+    case "$state" in
+        1)
+            warn "Secure Boot is ENABLED."
+            warn "The GRUB bootloader installed by this script is NOT signed, so the"
+            warn "firmware will refuse to boot Arch unless Secure Boot is disabled in"
+            warn "the BIOS (this does not affect the existing Windows installation)."
+            warn "Disable it now, or set up sbctl/shim with your own keys after boot."
+            ;;
+        0) ok "Secure Boot is disabled." ;;
+        *) warn "Secure Boot status could not be determined." ;;
+    esac
 }
 
 check_network() {
@@ -242,7 +284,29 @@ get_live_device() {
     done
 }
 
+windows_partition_on() {
+    # Return 0 if any partition on $1 is formatted with a Microsoft filesystem
+    # (i.e. the disk appears to hold the Windows installation or Windows data).
+    local disk="$1" part fstype
+    [[ -b "$disk" ]] || return 1
+    while IFS= read -r part; do
+        [[ "$part" == "$disk" ]] && continue
+        case "$part" in
+            "$disk"*) ;;
+            *) continue ;;
+        esac
+        fstype="$( blkid -s TYPE -o value "$part" 2>/dev/null || true )"
+        case "$fstype" in
+            ntfs | exfat | msdos)
+                return 0
+                ;;
+        esac
+    done < <( lsblk -rno NAME "$disk" 2>/dev/null || true )
+    return 1
+}
+
 list_disks() {
+    local disk
     printf '\n'
     printf 'Available disks:\n'
     printf '\n'
@@ -250,6 +314,22 @@ list_disks() {
         --nodeps \
         --paths \
         --output NAME,SIZE,MODEL,SERIAL,TYPE
+    printf '\n'
+    printf 'Notes (autodetected):\n'
+    while IFS= read -r disk; do
+        case "$disk" in
+            /dev/loop*) continue ;;
+        esac
+        if windows_partition_on "$disk"; then
+            printf '  %-22s Windows data detected -- do NOT select unless wiping it\n' "$disk"
+        else
+            printf '  %-22s no Windows data detected\n' "$disk"
+        fi
+    done < <( lsblk -dn -o PATH 2>/dev/null || true )
+    printf '\n'
+    printf 'Pick the SSD that does NOT hold Windows. If one/both NVMe drives are\n'
+    printf 'missing here, see the README: BIOS storage mode (VMD/RST vs AHCI).\n'
+    printf '\n'
 }
 
 validate_disk() {
@@ -303,6 +383,15 @@ confirm_disk() {
     read -rp "Type YES to continue: " answer
     if [[ "$answer" != "YES" ]]; then
         die "Disk selection cancelled."
+    fi
+
+    if windows_partition_on "$TARGET_DISK"; then
+        warn "This disk contains partitions that look like a Windows installation."
+        warn "If this is the Windows SSD, STOP here and re-run selecting the other disk."
+        read -rp 'Type ERASE to wipe this disk anyway: ' answer
+        if [[ "$answer" != "ERASE" ]]; then
+            die "Aborted: refusing to wipe a disk that appears to contain Windows."
+        fi
     fi
     ok "Disk confirmed."
 }
@@ -527,6 +616,17 @@ install_base_system() {
         warn "Unable to detect CPU microcode package."
     fi
 
+    if (( INSTALL_NVIDIA )); then
+        # Y9000P 2022 ships an RTX 3060 / 3070 Ti dGPU (hybrid graphics with the
+        # Intel iGPU). Install the driver at pacstrap time so the kernel module
+        # matches the `linux` kernel; mkinitcpio -P is re-run later in
+        # configure_resume(), so no initramfs hook work is skipped.
+        packages+=(
+            nvidia nvidia-utils nvidia-settings nvidia-prime
+        )
+        info "NVIDIA proprietary driver requested (INSTALL_NVIDIA=1)."
+    fi
+
     pacstrap -K /mnt "${packages[@]}" || die "Failed to install base system."
     ok "Base system installed."
 }
@@ -547,7 +647,7 @@ generate_fstab() {
 configure_system() {
     info "Configuring installed system..."
 
-    arch-chroot /mnt /bin/bash <<EOF
+    arch-chroot /mnt env INSTALL_NVIDIA="$INSTALL_NVIDIA" /bin/bash <<EOF
 set -e
 
 # timezone
@@ -591,6 +691,13 @@ systemctl enable snapper-timeline.timer
 
 # Enable grub-btrfsd (auto-update GRUB menu on new snapshots)
 systemctl enable grub-btrfsd.service
+
+# NVIDIA suspend/hibernate/resume integration (unit files ship with nvidia)
+if [ "${INSTALL_NVIDIA:-0}" = "1" ]; then
+    systemctl enable nvidia-suspend.service 2>/dev/null || true
+    systemctl enable nvidia-hibernate.service 2>/dev/null || true
+    systemctl enable nvidia-resume.service 2>/dev/null || true
+fi
 
 EOF
     ok "Basic system configuration completed."
@@ -642,8 +749,13 @@ configure_resume() {
             /etc/mkinitcpio.conf
     '
 
+    local kernel_cmdline="quiet resume=UUID=${SWAP_UUID}"
+    if (( INSTALL_NVIDIA && NVIDIA_DRM_MODESET )); then
+        kernel_cmdline+=" nvidia-drm.modeset=1"
+    fi
+    info "GRUB kernel cmdline: $kernel_cmdline"
     sed -i \
-        "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"quiet resume=UUID=$SWAP_UUID\"|" \
+        "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$kernel_cmdline\"|" \
         /mnt/etc/default/grub
 
     arch-chroot /mnt mkinitcpio -P
@@ -688,19 +800,85 @@ install_grub() {
 
     # NOTE: must run AFTER configure_snapshots() so grub-btrfs hook can find
     # snapper configs and embed the snapshot boot entries into grub.cfg
-    arch-chroot /mnt bash -c '
-        set -e
-        sed -i "s|^#\?GRUB_DISABLE_OS_PROBER=.*|GRUB_DISABLE_OS_PROBER=false|" /etc/default/grub
+    arch-chroot /mnt env \
+        ENABLE_OS_PROBER="$ENABLE_OS_PROBER" \
+        bash -c '
+            set -e
+            if [ "$ENABLE_OS_PROBER" = "1" ]; then
+                sed -i "s|^#\?GRUB_DISABLE_OS_PROBER=.*|GRUB_DISABLE_OS_PROBER=false|" /etc/default/grub
+            else
+                sed -i "s|^#\?GRUB_DISABLE_OS_PROBER=.*|GRUB_DISABLE_OS_PROBER=true|" /etc/default/grub
+            fi
 
-        grub-install \
-            --target=x86_64-efi \
-            --efi-directory=/boot/efi \
-            --bootloader-id=Arch \
-            --recheck
+            grub-install \
+                --target=x86_64-efi \
+                --efi-directory=/boot/efi \
+                --bootloader-id=Arch \
+                --recheck
 
-        grub-mkconfig -o /boot/grub/grub.cfg
-    '
+            # os-prober inspects the OTHER SSD (Windows disk, untouched by this
+            # installer) and appends a "Windows Boot Manager" chainload entry.
+            # Windows keeps its own bootloader on its own disk either way.
+            if [ "$ENABLE_OS_PROBER" = "1" ]; then
+                os-prober || true
+            fi
+
+            grub-mkconfig -o /boot/grub/grub.cfg
+        '
     ok "GRUB installation completed."
+}
+
+reorder_boot_entries() {
+    # Two disks (Windows + Arch), each with its own ESP => the firmware holds two
+    # boot entries. Show them, then optionally make Arch GRUB the first entry so
+    # the machine boots into the GRUB menu (where Windows can be picked too).
+    info "Checking UEFI boot entries..."
+    local output arch_num order new_order entry answer
+    output="$( arch-chroot /mnt efibootmgr 2>/dev/null || true )"
+    if [[ -z "$output" ]]; then
+        warn "efibootmgr returned nothing; cannot show boot entries."
+        return 0
+    fi
+
+    printf '%s\n' "$output" | grep '^Boot[0-9A-Fa-f]' || true
+    printf '\n'
+
+    arch_num="$( printf '%s\n' "$output" \
+        | awk '/^Boot[0-9A-Fa-f]{4}\*/ { if (index($0,"Arch")) { print substr($1,5,4); exit } }' )"
+    if [[ -z "$arch_num" ]]; then
+        warn "No 'Arch' boot entry found; skipping boot-order change."
+        return 0
+    fi
+    order="$( printf '%s\n' "$output" | awk '/^BootOrder:/ {print $2}' )"
+    if [[ -z "$order" ]]; then
+        warn "No BootOrder found; skipping boot-order change."
+        return 0
+    fi
+
+    read -rp "Set Arch (GRUB) as the first boot entry? [Y/n]: " answer
+    case "$answer" in
+        n | N | no | No)
+            info "Boot order left unchanged."
+            return 0
+            ;;
+    esac
+
+    new_order="$arch_num"
+    local order_array
+    IFS=',' read -r -a order_array <<< "$order"
+    for entry in "${order_array[@]}"; do
+        if [[ "$entry" == "$arch_num" ]]; then
+            continue
+        fi
+        new_order+=",$entry"
+    done
+
+    if arch-chroot /mnt efibootmgr -o "$new_order" >/dev/null 2>&1; then
+        ok "Boot order updated: Arch ($arch_num) is now the first boot entry."
+        ok "Windows Boot Manager remains selectable in GRUB and via F12."
+    else
+        warn "Failed to update boot order (efivarfs permission / Secure Boot?)."
+    fi
 }
 
 finish_installation() {
@@ -717,19 +895,35 @@ finish_installation() {
     }
 
     ok "Installation completed successfully."
-    printf '\n'
-    printf '=====================================\n'
-    printf 'Arch Linux installation finished.\n'
-    printf '\n'
-    printf 'Snapper snapshot commands (after reboot):\n'
-    printf '  sudo snapper list                          # List snapshots\n'
-    printf '  sudo snapper create -d "Before update"    # Manual snapshot\n'
-    printf '  sudo snapper rollback <number>            # Rollback to snapshot\n'
-    printf '\n'
-    printf 'You may reboot now.\n'
-    printf 'Remove the installation media first.\n'
-    printf '=====================================\n'
-    printf '\n'
+    cat <<EOF
+
+=====================================
+Arch Linux installation finished.
+
+This installer only touched: $TARGET_DISK
+The Windows SSD (the other disk) was left untouched.
+
+-- Dual boot (two SSDs, one OS per disk) --
+* Boot into Arch GRUB:  entry 'Arch' is first if you confirmed the reorder,
+  otherwise press F12 at power-on and pick 'Arch'.
+* Boot into Windows:    pick 'Windows Boot Manager' at F12, or choose it from
+  the Arch GRUB menu (os-prober only *detects* it; Windows is never modified).
+* If Windows is missing from the GRUB menu after reboot, run on Arch:
+      sudo os-prober && sudo grub-mkconfig -o /boot/grub/grub.cfg
+* NVIDIA RTX driver was installed; for hybrid-graphics offload launch apps with:
+      prime-run <command>
+* Clock skew between Windows and Arch (an 8 h difference): run once in Windows
+  as administrator:
+      reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f
+
+-- Snapper snapshots (after reboot) --
+  sudo snapper list                          # List snapshots
+  sudo snapper create -d "Before update"    # Manual snapshot
+  sudo snapper rollback <number>            # Rollback to snapshot
+
+Remove the installation media, then reboot.
+=====================================
+EOF
 }
 
 # -----------------------------------------------------------------------------
@@ -751,6 +945,7 @@ main() {
     check_commands
     check_architecture
     check_uefi
+    check_secure_boot
     check_network
     check_time
     setup_mirrors
@@ -771,6 +966,7 @@ main() {
     configure_resume
     configure_snapshots
     install_grub
+    reorder_boot_entries
 
     finish_installation
 }
