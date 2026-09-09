@@ -46,12 +46,11 @@
 
 ```
 /
-├── @             # 根
-├── @home         # 用户目录
-└── @snapshots    # Snapper 快照
+├── @             # 根（Snapper 首次配置时自动在 @ 内创建 .snapshots 子卷存放快照）
+└── @home         # 用户目录
 ```
 
-支持 Snapper 快照管理 + grub-btrfs 从 GRUB 菜单直接启动历史快照。
+`.snapshots` 子卷**不预先创建**，由 `snapper create-config` 在安装时自动生成（位于根子卷 @ 之内，开机即挂载为 `/.snapshots`）；配合 grub-btrfs 可从 GRUB 菜单直接启动历史快照。
 
 ### 系统配置
 
@@ -150,7 +149,7 @@ chmod +x install.sh
 | ---- | ---- | ---- | ---- |
 | EFI  | FAT32 | 1 GiB | Arch 自己的 UEFI 引导 |
 | Swap | swap  | 交互指定 | 交换空间 / 休眠（resume=UUID） |
-| Root | Btrfs | 剩余全部 | 系统数据（含 @、@home、@snapshots 子卷） |
+| Root | Btrfs | 剩余全部 | 系统数据（含 @、@home 子卷；`@/.snapshots` 由 Snapper 自动创建） |
 
 ---
 

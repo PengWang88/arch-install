@@ -595,12 +595,14 @@ mount_filesystems() {
     local btrfs_opts="noatime,compress=zstd:3,discard=async"
 
     # -------------------------------------------------------------------------
-    # Step 1: Temporarily mount btrfs root and create subvolumes
+    # Step 1: Temporarily mount btrfs root and create the @ and @home
+    #         subvolumes. The ".snapshots" location is intentionally NOT
+    #         pre-created here: `snapper create-config` (configure_snapshots)
+    #         creates its own nested .snapshots subvolume under @ later.
     # -------------------------------------------------------------------------
     mount "$ROOT_PART" /mnt
     btrfs subvolume create /mnt/@
     btrfs subvolume create /mnt/@home
-    btrfs subvolume create /mnt/@snapshots
     sync
     umount /mnt
 
@@ -610,9 +612,11 @@ mount_filesystems() {
     mount -o "$btrfs_opts",subvol=@ "$ROOT_PART" /mnt
 
     # -------------------------------------------------------------------------
-    # Step 3: Create mount-point directories INSIDE @ (must come AFTER @ mount)
+    # Step 3: Create mount-point directories INSIDE @ (must come AFTER @ mount).
+    #         Deliberately no /.snapshots here: it must not exist before
+    #         snapper create-config creates the .snapshots subvolume.
     # -------------------------------------------------------------------------
-    mkdir -p /mnt/home /mnt/.snapshots /mnt/boot/efi
+    mkdir -p /mnt/home /mnt/boot/efi
 
     # -------------------------------------------------------------------------
     # Step 4: Mount home subvolume
@@ -620,27 +624,20 @@ mount_filesystems() {
     mount -o "$btrfs_opts",subvol=@home "$ROOT_PART" /mnt/home
 
     # -------------------------------------------------------------------------
-    # Step 5: Mount snapshots subvolume (for Snapper + grub-btrfs)
-    # -------------------------------------------------------------------------
-    mount -o "$btrfs_opts",subvol=@snapshots "$ROOT_PART" /mnt/.snapshots
-    chmod 750 /mnt/.snapshots
-
-    # -------------------------------------------------------------------------
-    # Step 6: Mount EFI
+    # Step 5: Mount EFI
     # -------------------------------------------------------------------------
     mount -o umask=0077 "$EFI_PART" /mnt/boot/efi
 
     # -------------------------------------------------------------------------
-    # Step 7: Enable swap
+    # Step 6: Enable swap
     # -------------------------------------------------------------------------
     swapon "$SWAP_PART"
 
     # -------------------------------------------------------------------------
-    # Step 8: Verify all mount points
+    # Step 7: Verify all mount points
     # -------------------------------------------------------------------------
     mountpoint -q /mnt             || die "Root filesystem mount failed."
     mountpoint -q /mnt/home        || die "Home filesystem mount failed."
-    mountpoint -q /mnt/.snapshots  || die "Snapshots filesystem mount failed."
     mountpoint -q /mnt/boot/efi    || die "EFI filesystem mount failed."
     swapon --show | grep -q "$SWAP_PART" || die "Swap activation failed."
 
@@ -887,37 +884,19 @@ configure_resume() {
 configure_snapshots() {
     info "Configuring Snapper snapshots..."
 
-    # Snapper's create-config expects to create the ".snapshots" subvolume
-    # itself. Our btrfs layout already created the dedicated @snapshots
-    # subvolume and mounted it at /.snapshots, so create-config aborts with
-    # errno 17 (File exists). In that layout we register the config manually
-    # from the default template instead: snapshots then live inside the
-    # existing @snapshots subvolume, exactly as intended. On any other layout
-    # we fall back to snapper's own create-config.
+    # Let snapper create the config AND its own ".snapshots" subvolume (a
+    # btrfs subvolume nested under the root subvolume @, visible as
+    # /.snapshots at boot). This is why mount_filesystems must NOT pre-create
+    # @snapshots: create-config refuses to run when .snapshots already exists
+    # (errno 17, "File exists").
     # (Must use --no-dbus in chroot: no dbus-daemon is running.)
-    if mountpoint -q /mnt/.snapshots; then
-        arch-chroot /mnt bash -c '
-            set -e
-            mkdir -p /etc/snapper/configs
-            if [ -f /etc/snapper/configs-templates/default ]; then
-                cp /etc/snapper/configs-templates/default /etc/snapper/configs/root
-            else
-                : > /etc/snapper/configs/root
-            fi
-            # Mandatory keys for a btrfs config of "/".
-            sed -i "s|^#\?SUBVOLUME=.*|SUBVOLUME=\"/\"|" /etc/snapper/configs/root
-            grep -q "^SUBVOLUME=" /etc/snapper/configs/root || \
-                printf "SUBVOLUME=\"/\"\n" >> /etc/snapper/configs/root
-            sed -i "s|^#\?FSTYPE=.*|FSTYPE=\"btrfs\"|" /etc/snapper/configs/root
-            grep -q "^FSTYPE=" /etc/snapper/configs/root || \
-                printf "FSTYPE=\"btrfs\"\n" >> /etc/snapper/configs/root
-        ' || die "Failed to create snapper config."
-        info "Snapper config registered for the pre-created @snapshots subvolume (/.snapshots)."
-    else
-        arch-chroot /mnt snapper --no-dbus -c root create-config / || {
-            die "Failed to create snapper config."
-        }
-    fi
+    arch-chroot /mnt snapper --no-dbus -c root create-config / || {
+        die "Failed to create snapper config."
+    }
+
+    # Keep the .snapshots directory mode from the previous dedicated-subvolume
+    # layout.
+    arch-chroot /mnt chmod 750 /.snapshots
 
     # Tune retention policy: keep 10 hourly + 7 daily
     # shellcheck disable=SC2016  # single quotes are intentional: $CFG must be
