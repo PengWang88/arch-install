@@ -856,8 +856,8 @@ reorder_boot_entries() {
     fi
 
     read -rp "Set Arch (GRUB) as the first boot entry? [Y/n]: " answer
-    case "$answer" in
-        n | N | no | No)
+    case "${answer,,}" in
+        n | no)
             info "Boot order left unchanged."
             return 0
             ;;
