@@ -35,9 +35,9 @@
 
 ### Y9000P 2022 硬件适配（默认开启，均可开关）
 
-* **NVIDIA 独显驱动**：`nvidia nvidia-utils nvidia-settings nvidia-prime`（RTX 3060 / 3070 Ti）
+* **NVIDIA 独显驱动**：`nvidia-open nvidia-utils nvidia-settings nvidia-prime`（RTX 3060 / 3070 Ti；上游自 590 驱动起（2025-12）已用开源内核模块 `nvidia-open` 取代闭源 `nvidia` 包，适用于 Turing / RTX 20 及更新显卡）
 * 内核参数追加 `nvidia-drm.modeset=1`（混合显卡 KMS / Wayland 需要）
-* 启用 NVIDIA 休眠/挂起服务（`nvidia-suspend` 等）
+* NVIDIA 电源管理由驱动内置处理（560+ 起 DRM 默认开启，不再需要旧的 `nvidia-suspend` 等 systemd 单元）
 * Alder Lake 声卡固件：`sof-firmware` + `alsa-ucm-conf`（已有）
 * Intel 无线/蓝牙：`linux-firmware` + `bluez`（已有）
 * TLP 电源管理（已有）
@@ -68,7 +68,7 @@
 | 变量 | 默认 | 说明 |
 | ---- | ---- | ---- |
 | `ENABLE_OS_PROBER` | `1` | 在 Arch GRUB 菜单里加入 Windows 入口。`0` = 完全独立，只靠 F12 选盘 |
-| `INSTALL_NVIDIA` | `1` | 安装 NVIDIA 闭源驱动系列包 |
+| `INSTALL_NVIDIA` | `1` | 安装 NVIDIA 驱动（`nvidia-open` 开源内核模块 + `nvidia-utils` 等；安装失败会自动跳过、不中断安装） |
 | `NVIDIA_DRM_MODESET` | `1` | 追加 `nvidia-drm.modeset=1` 内核参数 |
 | `MIRROR_COUNTRY` | `CN` | reflector 镜像源国家 |
 | `MIRROR_AGE` / `MIRROR_PROTOCOL` | `12` / `https` | reflector 参数 |
@@ -221,6 +221,18 @@ BIOS 存储模式处于 VMD/RST，需切到 AHCI（切换步骤见上，先让 W
 1. 检查网络、ISO 是否最新
 2. 确认 UEFI 启动、Secure Boot 状态
 3. 查看日志（脚本运行时会打印日志路径，也可在失败提示中找到）
+4. 若失败信息包含 `target not found: nvidia` 或其它 NVIDIA 包缺失：见下方 NVIDIA 常见问题（上游包名已于 2025-12 变更，脚本已适配，通常换镜像重试即可）
+
+---
+
+### 报错 `error: target not found: nvidia`？
+
+Arch 上游在 2025-12 的 590 驱动更新中移除了闭源的 `nvidia` 包，改用开源内核模块 `nvidia-open`（官方支持 Turing / RTX 20 及以上；RTX 30/40/50 与 GTX 16 系均适用）。本脚本已同步改用 `nvidia-open nvidia-utils nvidia-settings nvidia-prime`：
+
+* 若安装时仍报 `target not found: nvidia*`，说明所选镜像的 `extra` 仓库数据过期或不完整，先刷新镜像再重试：
+  `reflector --country CN --latest 10 --protocol https --sort rate --save /etc/pacman.d/mirrorlist`
+  脚本此时会自动跳过 NVIDIA 继续完成安装（日志会给出 WARN 及后续补救命令），不会中断整个安装。
+* 若显卡是 Pascal（GTX 10 系）或更老：`nvidia-open` 不支持，需要 AUR 的 `nvidia-580xx-dkms`（可先 `INSTALL_NVIDIA=0 ./install.sh` 完成安装后再手动装）。
 
 ---
 
