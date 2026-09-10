@@ -227,10 +227,48 @@ sudo snapper rollback <编号>              # 回滚
 
 ## 📁 项目结构
 
+**当前**（单文件版本，可正常使用）：
+
 ```
 arch-install
-├── install.sh     # 自动安装脚本（双硬盘双系统适配）
-└── README.md      # 使用说明
+├── install.sh              # 自动安装脚本（双硬盘双系统适配）
+├── README.md               # 使用说明
+└── docs/
+    ├── ARCHITECTURE.md     # 重构后的目标架构设计
+    └── ROADMAP.md          # 实现清单（分阶段 + 组件清单）
+```
+
+**目标结构**（重构进行中）：项目将拆成 **系统安装脚本 + 组件/软件安装脚本** 两层：
+
+```
+arch-install
+├── install.sh              # 入口①：系统安装（Arch ISO 环境，root）
+├── setup.sh                # 入口②：组件安装与管理（已装好的系统）
+├── bootstrap.sh            # 引导：拉取仓库后调用上面两个入口
+├── lib/                    # 共享库：日志/配置/交互/pacman/磁盘/组件框架
+├── stages/                 # 系统安装各阶段（检测→镜像→分区→挂载→pacstrap→配置→引导）
+├── components/             # 组件脚本，按分类存放，放入即自动发现
+│   ├── 00-base/            #   基础系统增强（AUR helper、zram、快照、防火墙…）
+│   ├── 10-hardware/        #   硬件与驱动（NVIDIA、蓝牙、声卡、风扇、键盘灯…）
+│   ├── 20-desktop/         #   桌面环境 / 窗口管理器（KDE、GNOME、Hyprland…）
+│   ├── 30-i18n/            #   中文环境（字体、fontconfig、fcitx5…）
+│   ├── 40-dev/             #   开发环境（语言运行时、容器、编辑器…）
+│   ├── 50-gaming/          #   游戏与性能（Steam、gamemode、MangoHud…）
+│   └── 60-apps/            #   常用日常软件（浏览器、办公、影音、聊天…）
+├── config/                 # 配置模板与预设组合
+└── docs/
+```
+
+设计目标、目录职责、组件接口约定见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)；
+分阶段实现清单与 110 个组件清单见 [`docs/ROADMAP.md`](docs/ROADMAP.md)。
+
+重构完成后的用法预览：
+
+```bash
+./setup.sh --list                       # 列出全部组件及安装状态
+./setup.sh --install nvidia-open,fcitx5 # 按 id 安装（自动解析依赖）
+./setup.sh --preset laptop-y9000p       # 按预设组合安装
+./setup.sh                              # 交互式菜单
 ```
 
 ---
