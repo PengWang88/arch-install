@@ -175,8 +175,8 @@ require_command() {
 
 check_commands() {
     # Tools required in the live (ISO) environment. Commands that only run
-    # inside the chroot (e.g. snapper, grub-install, grub-mkconfig) come from
-    # packages installed by pacstrap and are deliberately not checked here.
+    # inside the chroot (e.g. grub-install, grub-mkconfig) come from packages
+    # installed by pacstrap and are deliberately not checked here.
     local commands=(
         curl date sleep tee timedatectl uname lsblk blkid findmnt od
         sgdisk partprobe mkfs.fat mkfs.btrfs btrfs
@@ -554,9 +554,8 @@ mount_filesystems() {
 
     # -------------------------------------------------------------------------
     # Step 1: Temporarily mount btrfs root and create the @ and @home
-    #         subvolumes. The ".snapshots" location is intentionally NOT
-    #         pre-created here: `snapper create-config` (configure_snapshots)
-    #         creates its own nested .snapshots subvolume under @ later.
+    #         subvolumes. No /.snapshots is created: the layout stays
+    #         snapshot-ready for a later Snapper setup.
     # -------------------------------------------------------------------------
     mount "$ROOT_PART" /mnt
     btrfs subvolume create /mnt/@
@@ -571,8 +570,6 @@ mount_filesystems() {
 
     # -------------------------------------------------------------------------
     # Step 3: Create mount-point directories INSIDE @ (must come AFTER @ mount).
-    #         Deliberately no /.snapshots here: it must not exist before
-    #         snapper create-config creates the .snapshots subvolume.
     # -------------------------------------------------------------------------
     mkdir -p /mnt/home /mnt/boot/efi
 
@@ -620,7 +617,6 @@ install_base_system() {
     local packages=(
         base linux linux-firmware
         btrfs-progs
-        snapper grub-btrfs inotify-tools
         grub efibootmgr os-prober
         fuse3 ntfs-3g
         networkmanager
@@ -755,13 +751,6 @@ systemctl enable bluetooth
 systemctl enable tlp
 systemctl mask systemd-rfkill.service systemd-rfkill.socket 2>/dev/null || true
 
-# Enable Snapper cleanup / timeline timers
-systemctl enable snapper-cleanup.timer
-systemctl enable snapper-timeline.timer
-
-# Enable grub-btrfsd (auto-update GRUB menu on new snapshots)
-systemctl enable grub-btrfsd.service
-
 # NOTE: no nvidia-suspend/-hibernate/-resume units are enabled here - the
 # current open-module driver (nvidia-utils 560+) enables DRM by default and no
 # longer ships those systemd units.
@@ -820,52 +809,26 @@ configure_kernel_cmdline() {
 }
 
 # -----------------------------------------------------------------------------
-# Snapper + grub-btrfs snapshot configuration
+# Snapshots: intentionally NOT configured
 # -----------------------------------------------------------------------------
-configure_snapshots() {
-    info "Configuring Snapper snapshots..."
+# This installer does not set up Snapper/grub-btrfs snapshots. The btrfs
+# subvolume layout (@, @home) is snapshot-ready, but /.snapshots is deliberately
+# left absent: `snapper create-config` creates that nested subvolume itself and
+# refuses to run when the directory already exists (errno 17, "File exists").
+# To enable snapshots later, on the installed system:
+#   pacman -S snapper grub-btrfs inotify-tools
+#   snapper --no-dbus -c root create-config /
+#   chmod 750 /.snapshots
+#   systemctl enable --now snapper-timeline.timer snapper-cleanup.timer
+#   systemctl enable --now grub-btrfsd.service
+#   grub-mkconfig -o /boot/grub/grub.cfg
 
-    # Let snapper create the config AND its own ".snapshots" subvolume (a
-    # btrfs subvolume nested under the root subvolume @, visible as
-    # /.snapshots at boot). This is why mount_filesystems must NOT pre-create
-    # @snapshots: create-config refuses to run when .snapshots already exists
-    # (errno 17, "File exists").
-    # (Must use --no-dbus in chroot: no dbus-daemon is running.)
-    arch-chroot /mnt snapper --no-dbus -c root create-config / || {
-        die "Failed to create snapper config."
-    }
-
-    # Keep the .snapshots directory mode from the previous dedicated-subvolume
-    # layout.
-    arch-chroot /mnt chmod 750 /.snapshots
-
-    # Tune retention policy: keep 10 hourly + 7 daily
-    # shellcheck disable=SC2016  # single quotes are intentional: $CFG must be
-    #                             # expanded inside the chroot, not by this shell
-    arch-chroot /mnt bash -c '
-        set -e
-        CFG=/etc/snapper/configs/root
-        sed -i "s|^TIMELINE_LIMIT_HOURLY=.*|TIMELINE_LIMIT_HOURLY=\"10\"|"  $CFG
-        sed -i "s|^TIMELINE_LIMIT_DAILY=.*|TIMELINE_LIMIT_DAILY=\"7\"|"     $CFG
-        sed -i "s|^TIMELINE_LIMIT_WEEKLY=.*|TIMELINE_LIMIT_WEEKLY=\"0\"|"   $CFG
-        sed -i "s|^TIMELINE_LIMIT_MONTHLY=.*|TIMELINE_LIMIT_MONTHLY=\"0\"|" $CFG
-        sed -i "s|^TIMELINE_LIMIT_YEARLY=.*|TIMELINE_LIMIT_YEARLY=\"0\"|"   $CFG
-    '
-
-    # Create initial post-install snapshot so GRUB has at least one entry
-    arch-chroot /mnt snapper --no-dbus -c root create \
-        --description "Initial Arch Linux installation" || {
-        warn "Failed to create initial snapshot (can be created later manually)."
-    }
-
-    ok "Snapper snapshots configured."
-}
-
+# -----------------------------------------------------------------------------
+# Bootloader
+# -----------------------------------------------------------------------------
 install_grub() {
     info "Installing GRUB bootloader..."
 
-    # NOTE: must run AFTER configure_snapshots() so grub-btrfs hook can find
-    # snapper configs and embed the snapshot boot entries into grub.cfg
     arch-chroot /mnt env \
         ENABLE_OS_PROBER="$ENABLE_OS_PROBER" \
         bash -c '
@@ -993,11 +956,6 @@ The Windows SSD (the other disk) was left untouched.
   as administrator:
       reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f
 
--- Snapper snapshots (after reboot) --
-  sudo snapper list                          # List snapshots
-  sudo snapper create -d "Before update"    # Manual snapshot
-  sudo snapper rollback <number>            # Rollback to snapshot
-
 Remove the installation media, then reboot.
 =====================================
 EOF
@@ -1045,7 +1003,6 @@ main() {
     create_user
 
     configure_kernel_cmdline
-    configure_snapshots
     install_grub
     reorder_boot_entries
 

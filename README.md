@@ -46,15 +46,15 @@
 
 ```
 /
-├── @             # 根（Snapper 首次配置时自动在 @ 内创建 .snapshots 子卷存放快照）
+├── @             # 根
 └── @home         # 用户目录
 ```
 
-`.snapshots` 子卷**不预先创建**，由 `snapper create-config` 在安装时自动生成（位于根子卷 @ 之内，开机即挂载为 `/.snapshots`）；配合 grub-btrfs 可从 GRUB 菜单直接启动历史快照。
+布局是**快照就绪**的，但安装时**不启用快照**：`/.snapshots` 子卷不会被创建。若以后想用 Snapper + grub-btrfs 从 GRUB 菜单启动历史快照，见 [安装后启用快照](#安装后启用快照)。
 
 ### 系统配置
 
-自动完成：时区（Asia/Shanghai）、Locale、主机名、用户创建、sudo、NetworkManager、systemd-timesyncd、蓝牙、TLP、NVIDIA 内核参数（`nvidia-drm.modeset=1`）、Snapper 定时快照。
+自动完成：时区（Asia/Shanghai）、Locale、主机名、用户创建、sudo、NetworkManager、systemd-timesyncd、蓝牙、TLP、NVIDIA 内核参数（`nvidia-drm.modeset=1`）。
 
 ### 安装日志 / 彩色进度
 
@@ -137,7 +137,7 @@ chmod +x install.sh
 
 移除安装 U 盘后重启：
 
-* 若选择了「Arch 设为第一启动项」→ 直接进 GRUB，菜单里有 Arch（含快照项）和 Windows Boot Manager
+* 若选择了「Arch 设为第一启动项」→ 直接进 GRUB，菜单里有 Arch 和 Windows Boot Manager
 * 否则按 **F12** 选盘：`Arch` 进 Arch，`Windows Boot Manager` 进 Windows
 
 ---
@@ -147,7 +147,7 @@ chmod +x install.sh
 | 分区 | 文件系统 | 大小 | 用途 |
 | ---- | ---- | ---- | ---- |
 | EFI  | FAT32 | 1 GiB | Arch 自己的 UEFI 引导 |
-| Root | Btrfs | 剩余全部 | 系统数据（含 @、@home 子卷；`@/.snapshots` 由 Snapper 自动创建） |
+| Root | Btrfs | 剩余全部 | 系统数据（含 @、@home 子卷） |
 
 > 本方案**没有 swap 分区**。因此：不支持休眠到磁盘；内存不足时由内核 OOM killer 直接回收。若希望有内存压缩兜底，可在装好系统后启用 zram（**不需要** swap 分区或 swapfile）：
 >
@@ -164,7 +164,7 @@ chmod +x install.sh
 
 ## 🔧 安装后的系统组件与常用操作
 
-脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager、Bluetooth、TLP、Snapper、grub-btrfs、NVIDIA 驱动。
+脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager、Bluetooth、TLP、NVIDIA 驱动。**不安装、也不配置 Snapper / grub-btrfs。**
 
 ```bash
 # 如果 GRUB 菜单里没有 Windows 入口，重新生成一次：
@@ -173,14 +173,35 @@ sudo os-prober && sudo grub-mkconfig -o /boot/grub/grub.cfg
 # 独显程序（混合显卡下用核显输出，独显跑负载）：
 prime-run <command>
 
-# 快照：
-sudo snapper list                        # 查看快照
-sudo snapper create -d "Before update"   # 手动快照
-sudo snapper rollback <编号>              # 回滚
-
 # 如果 Windows 与 Arch 时间相差 8 小时（Windows 管理员命令行执行一次）：
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f
 ```
+
+### 安装后启用快照
+
+脚本不配置快照，但 Btrfs 布局（`@` / `@home`）是快照就绪的。需要时在 Arch 里执行：
+
+```bash
+sudo pacman -S snapper grub-btrfs inotify-tools
+
+# 让 snapper 自己创建 /.snapshots 子卷（该目录必须尚不存在！）
+sudo snapper --no-dbus -c root create-config /
+sudo chmod 750 /.snapshots
+
+# 定时快照与自动清理（可选）
+sudo systemctl enable --now snapper-timeline.timer snapper-cleanup.timer
+
+# 让 GRUB 菜单出现快照启动项
+sudo systemctl enable --now grub-btrfsd.service
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+# 使用：
+sudo snapper list                        # 查看快照
+sudo snapper create -d "Before update"   # 手动快照
+sudo snapper rollback <编号>              # 回滚
+```
+
+> ⚠️ `snapper create-config` 在 `/.snapshots` 已存在时会失败（`File exists`）。所以**不要**手动预建该目录——本安装脚本也刻意不创建它。
 
 ---
 
