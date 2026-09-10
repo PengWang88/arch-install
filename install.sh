@@ -163,7 +163,7 @@ check_commands() {
     # inside the chroot (e.g. grub-install, grub-mkconfig) come from packages
     # installed by pacstrap and are deliberately not checked here.
     local commands=(
-        curl date sleep tee timedatectl uname lsblk blkid findmnt od
+        curl date sleep tee timedatectl uname lsblk findmnt od
         sgdisk partprobe mkfs.fat mkfs.btrfs btrfs
         mount umount mountpoint
         pacman pacstrap genfstab arch-chroot
@@ -337,29 +337,7 @@ get_live_device() {
     done
 }
 
-windows_partition_on() {
-    # Return 0 if any partition on $1 is formatted with a Microsoft filesystem
-    # (i.e. the disk appears to hold the Windows installation or Windows data).
-    local disk="$1" part fstype
-    [[ -b "$disk" ]] || return 1
-    while IFS= read -r part; do
-        [[ "$part" == "$disk" ]] && continue
-        case "$part" in
-            "$disk"*) ;;
-            *) continue ;;
-        esac
-        fstype="$( blkid -s TYPE -o value "$part" 2>/dev/null || true )"
-        case "$fstype" in
-            ntfs | exfat | msdos)
-                return 0
-                ;;
-        esac
-    done < <( lsblk -rno NAME "$disk" 2>/dev/null || true )
-    return 1
-}
-
 list_disks() {
-    local disk
     printf '\n'
     printf 'Available disks:\n'
     printf '\n'
@@ -368,20 +346,9 @@ list_disks() {
         --paths \
         --output NAME,SIZE,MODEL,SERIAL,TYPE
     printf '\n'
-    printf 'Notes (autodetected):\n'
-    while IFS= read -r disk; do
-        case "$disk" in
-            /dev/loop*) continue ;;
-        esac
-        if windows_partition_on "$disk"; then
-            printf '  %-22s Windows data detected -- do NOT select unless wiping it\n' "$disk"
-        else
-            printf '  %-22s no Windows data detected\n' "$disk"
-        fi
-    done < <( lsblk -dn -o PATH 2>/dev/null || true )
-    printf '\n'
-    printf 'Pick the SSD that does NOT hold Windows. If one/both NVMe drives are\n'
-    printf 'missing here, see the README: BIOS storage mode (VMD/RST vs AHCI).\n'
+    printf 'Pick the SSD that should hold Arch Linux (the other one keeps Windows).\n'
+    printf 'If one/both NVMe drives are missing here, see the README: BIOS storage\n'
+    printf 'mode (VMD/RST vs AHCI).\n'
     printf '\n'
 }
 
@@ -443,15 +410,6 @@ confirm_disk() {
     if [[ "$answer" != "YES" ]]; then
         die "Disk selection cancelled."
     fi
-
-    if windows_partition_on "$TARGET_DISK"; then
-        warn "This disk contains partitions that look like a Windows installation."
-        warn "If this is the Windows SSD, STOP here and re-run selecting the other disk."
-        read -rp 'Type ERASE to wipe this disk anyway: ' answer
-        if [[ "$answer" != "ERASE" ]]; then
-            die "Aborted: refusing to wipe a disk that appears to contain Windows."
-        fi
-    fi
     ok "Disk confirmed."
 }
 
@@ -495,7 +453,7 @@ partition_disk() {
     ROOT_PART="$(get_partition_name "$TARGET_DISK" 2)"
 
     # Layout is fixed, so no second confirmation is asked here: confirm_disk()
-    # already required YES (plus ERASE when the disk looks like Windows data).
+    # already required an explicit YES.
     printf '\n'
     printf 'Partition layout:\n'
     printf '  EFI  : %s\n' "$EFI_PART"
