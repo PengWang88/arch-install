@@ -42,10 +42,7 @@ readonly LOG_FILE
 
 TARGET_DISK=""
 EFI_PART=""
-SWAP_PART=""
 ROOT_PART=""
-SWAP_SIZE=""
-SWAP_UUID=""
 
 # Set to 1 once the NVIDIA driver packages were actually installed. It stays 0
 # when INSTALL_NVIDIA=1 but the repositories cannot provide the packages, so
@@ -182,8 +179,8 @@ check_commands() {
     # packages installed by pacstrap and are deliberately not checked here.
     local commands=(
         curl date sleep tee timedatectl uname lsblk blkid findmnt od
-        sgdisk partprobe mkfs.fat mkswap mkfs.btrfs btrfs free
-        mount umount mountpoint swapon swapoff
+        sgdisk partprobe mkfs.fat mkfs.btrfs btrfs
+        mount umount mountpoint
         pacman pacstrap genfstab arch-chroot
         sed awk grep sync mkdir cat
     )
@@ -477,16 +474,6 @@ cleanup_disk_state() {
         warn "Unmounting leftover mounts under /mnt from a previous run..."
         umount -R /mnt 2>/dev/null || true
     fi
-
-    local swap_dev
-    while read -r swap_dev; do
-        case "$swap_dev" in
-            "$TARGET_DISK"*)
-                warn "Disabling leftover swap on target disk: $swap_dev"
-                swapoff "$swap_dev" 2>/dev/null || true
-                ;;
-        esac
-    done < <( swapon --show | awk 'NR > 1 {print $1}' )
 }
 
 assert_disk_unused() {
@@ -497,25 +484,6 @@ assert_disk_unused() {
         | tr '\n' ' ' )"
     used="${used% }"
     [[ -z "$used" ]] || die "Target disk is still in use: $used"
-}
-
-ask_swap_size() {
-    local swap_input
-    local mem_total
-    mem_total="$( free -h | awk '/^Mem:/ {print $2}' )"
-    info "Physical memory: ${mem_total:-unknown}"
-    info "For hibernation, swap should be at least as large as RAM."
-    while true; do
-        read -rp "Enter swap size (e.g., 8G, 4096M) [default: 8G]: " swap_input
-        swap_input="${swap_input:-8G}"
-        if [[ "$swap_input" =~ ^[0-9]+[GMgm]$ ]]; then
-            SWAP_SIZE="$swap_input"
-            info "Swap size set to: $SWAP_SIZE"
-            return 0
-        else
-            warn "Invalid swap size format: '$swap_input'. Please use format like 8G or 4096M."
-        fi
-    done
 }
 
 get_partition_name() {
@@ -532,16 +500,12 @@ partition_disk() {
     cleanup_disk_state
     assert_disk_unused
 
-    ask_swap_size
-
     EFI_PART="$(get_partition_name "$TARGET_DISK" 1)"
-    SWAP_PART="$(get_partition_name "$TARGET_DISK" 2)"
-    ROOT_PART="$(get_partition_name "$TARGET_DISK" 3)"
+    ROOT_PART="$(get_partition_name "$TARGET_DISK" 2)"
 
     printf '\n'
     printf 'Partition layout:\n'
     printf '  EFI  : %s\n' "$EFI_PART"
-    printf '  SWAP : %s\n' "$SWAP_PART"
     printf '  ROOT : %s\n' "$ROOT_PART"
     printf '\n'
 
@@ -557,12 +521,8 @@ partition_disk() {
         -t 1:ef00 \
         "$TARGET_DISK"
     sgdisk \
-        -n 2:0:+"${SWAP_SIZE}" \
-        -t 2:8200 \
-        "$TARGET_DISK"
-    sgdisk \
-        -n 3:0:0 \
-        -t 3:8300 \
+        -n 2:0:0 \
+        -t 2:8300 \
         "$TARGET_DISK"
 
     partprobe "$TARGET_DISK"
@@ -570,20 +530,18 @@ partition_disk() {
     # Wait until the kernel exposes all partition nodes (NVMe/eMMC can be slow).
     local attempt
     for ((attempt = 0; attempt < 20; attempt++)); do
-        if [[ -b "$EFI_PART" && -b "$SWAP_PART" && -b "$ROOT_PART" ]]; then
+        if [[ -b "$EFI_PART" && -b "$ROOT_PART" ]]; then
             break
         fi
         sleep 1
     done
-    if [[ ! -b "$EFI_PART" || ! -b "$SWAP_PART" || ! -b "$ROOT_PART" ]]; then
-        die "Partition nodes did not appear: $EFI_PART $SWAP_PART $ROOT_PART"
+    if [[ ! -b "$EFI_PART" || ! -b "$ROOT_PART" ]]; then
+        die "Partition nodes did not appear: $EFI_PART $ROOT_PART"
     fi
 
     mkfs.fat -F32 "$EFI_PART"
-    mkswap "$SWAP_PART"
     mkfs.btrfs -f "$ROOT_PART"
 
-    SWAP_UUID="$( blkid -s UUID -o value "$SWAP_PART" )"
     ok "Partitioning completed."
 }
 
@@ -629,17 +587,11 @@ mount_filesystems() {
     mount -o umask=0077 "$EFI_PART" /mnt/boot/efi
 
     # -------------------------------------------------------------------------
-    # Step 6: Enable swap
-    # -------------------------------------------------------------------------
-    swapon "$SWAP_PART"
-
-    # -------------------------------------------------------------------------
-    # Step 7: Verify all mount points
+    # Step 6: Verify all mount points
     # -------------------------------------------------------------------------
     mountpoint -q /mnt             || die "Root filesystem mount failed."
     mountpoint -q /mnt/home        || die "Home filesystem mount failed."
     mountpoint -q /mnt/boot/efi    || die "EFI filesystem mount failed."
-    swapon --show | grep -q "$SWAP_PART" || die "Swap activation failed."
 
     ok "Filesystems mounted."
 }
@@ -688,9 +640,7 @@ install_base_system() {
 
     # -------------------------------------------------------------------------
     # Preferred path: everything (base + NVIDIA) in ONE pacstrap so the NVIDIA
-    # kernel module and the `linux` kernel are guaranteed to match. mkinitcpio
-    # -P is re-run later in configure_resume(), so no initramfs work is skipped
-    # for this combined install either.
+    # kernel module and the `linux` kernel are guaranteed to match.
     #
     # Driver set: nvidia-open nvidia-utils nvidia-settings nvidia-prime.
     # The old closed-source `nvidia` package no longer exists in the Arch
@@ -851,31 +801,22 @@ create_user() {
     ok "User created."
 }
 
-configure_resume() {
-    info "Configuring hibernation resume..."
-    if [[ -z "$SWAP_UUID" ]]; then
-        die "Swap UUID is empty. Cannot configure hibernation resume."
+configure_kernel_cmdline() {
+    # No swap is created, so there is no hibernation/suspend-to-disk and no
+    # `resume=` parameter (nor the initramfs `resume` hook) to configure.
+    # The NVIDIA early-KMS parameter is kept: it is independent of swap and is
+    # required by most Wayland/X sessions on hybrid-graphics laptops.
+    if (( ! NVIDIA_INSTALLED || ! NVIDIA_DRM_MODESET )); then
+        info "Kernel cmdline left at distribution default (no NVIDIA KMS requested)."
+        return 0
     fi
 
-    arch-chroot /mnt bash -c '
-        set -e
-        cp /etc/mkinitcpio.conf /etc/mkinitcpio.conf.bak
-        sed -i \
-            "s|^HOOKS=.*|HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block resume filesystems fsck)|" \
-            /etc/mkinitcpio.conf
-    '
-
-    local kernel_cmdline="quiet resume=UUID=${SWAP_UUID}"
-    if (( NVIDIA_INSTALLED && NVIDIA_DRM_MODESET )); then
-        kernel_cmdline+=" nvidia-drm.modeset=1"
-    fi
+    local kernel_cmdline="quiet nvidia-drm.modeset=1"
     info "GRUB kernel cmdline: $kernel_cmdline"
     sed -i \
         "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$kernel_cmdline\"|" \
         /mnt/etc/default/grub
-
-    arch-chroot /mnt mkinitcpio -P
-    ok "Hibernate resume configured."
+    ok "NVIDIA DRM kernel modeset configured."
 }
 
 # -----------------------------------------------------------------------------
@@ -1010,10 +951,6 @@ finish_installation() {
     info "Performing final installation cleanup..."
     sync
 
-    if swapon --show | grep -q "$SWAP_PART"; then
-        swapoff "$SWAP_PART"
-    fi
-
     umount -R /mnt || {
         warn "Some mounts could not be unmounted."
         mount | grep /mnt || true
@@ -1107,7 +1044,7 @@ main() {
     configure_system
     create_user
 
-    configure_resume
+    configure_kernel_cmdline
     configure_snapshots
     install_grub
     reorder_boot_entries

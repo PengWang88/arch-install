@@ -20,8 +20,8 @@
 * 自动配置 pacman 镜像源（默认中国区，可用 `MIRROR_COUNTRY` 覆盖）
 * GPT 分区方案，全部落在**目标盘**上：
   * 1 GiB EFI 分区
-  * Swap 分区（可交互指定大小，休眠建议 ≥ 内存）
-  * Btrfs 根分区
+  * Btrfs 根分区（占剩余全部空间）
+* **不创建 swap 分区、不使用 swapfile**：系统不使用磁盘交换空间，因此**不支持休眠到磁盘（hibernate）**；日常挂起（suspend-to-RAM / s2idle）不受影响。若需要内存紧张时的兜底，可在装好后自行启用 `zram`（见下文）
 * 自动识别 / 拒绝：非 UEFI、非官方 ISO、架构不符、目标盘仍被占用等情况
 
 ### 双系统 / 双硬盘支持
@@ -54,7 +54,7 @@
 
 ### 系统配置
 
-自动完成：时区（Asia/Shanghai）、Locale、主机名、用户创建、sudo、NetworkManager、systemd-timesyncd、蓝牙、TLP、休眠 resume（`resume=UUID=…`）、Snapper 定时快照。
+自动完成：时区（Asia/Shanghai）、Locale、主机名、用户创建、sudo、NetworkManager、systemd-timesyncd、蓝牙、TLP、NVIDIA 内核参数（`nvidia-drm.modeset=1`）、Snapper 定时快照。
 
 ### 安装日志 / 彩色进度
 
@@ -130,7 +130,6 @@ chmod +x install.sh
 
 * 磁盘选择——**对照磁盘列表的自动标注，选「无 Windows 数据」的那块 SSD**（例如 `/dev/nvme1n1`）
 * 若误选到含 Windows 的盘，脚本会要求输入 `ERASE` 才会继续
-* Swap 大小（休眠请给 ≥ 内存大小）
 * 用户名 / 密码
 * 是否把 Arch 设为第一启动项
 
@@ -148,14 +147,24 @@ chmod +x install.sh
 | 分区 | 文件系统 | 大小 | 用途 |
 | ---- | ---- | ---- | ---- |
 | EFI  | FAT32 | 1 GiB | Arch 自己的 UEFI 引导 |
-| Swap | swap  | 交互指定 | 交换空间 / 休眠（resume=UUID） |
 | Root | Btrfs | 剩余全部 | 系统数据（含 @、@home 子卷；`@/.snapshots` 由 Snapper 自动创建） |
+
+> 本方案**没有 swap 分区**。因此：不支持休眠到磁盘；内存不足时由内核 OOM killer 直接回收。若希望有内存压缩兜底，可在装好系统后启用 zram（**不需要** swap 分区或 swapfile）：
+>
+> ```bash
+> sudo pacman -S zram-generator
+> sudo tee /etc/systemd/zram-generator.conf >/dev/null <<'EOF'
+> [zram0]
+> zram-size = ram / 2
+> EOF
+> sudo systemctl daemon-reload && sudo systemctl start systemd-zram-setup@zram0.service
+> ```
 
 ---
 
 ## 🔧 安装后的系统组件与常用操作
 
-脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager、Bluetooth、TLP、Snapper、grub-btrfs、NVIDIA 驱动、休眠 resume。
+脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager、Bluetooth、TLP、Snapper、grub-btrfs、NVIDIA 驱动。
 
 ```bash
 # 如果 GRUB 菜单里没有 Windows 入口，重新生成一次：
