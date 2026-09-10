@@ -33,11 +33,9 @@
 * 磁盘列表自动标注「哪块盘有 Windows 数据」
 * 装完可选把 Arch 设为第一启动项（也可保持 F12 手动选盘）
 
-### Y9000P 2022 硬件适配（默认开启，均可开关）
+### Y9000P 2022 硬件适配
 
-* **NVIDIA 独显驱动**：`nvidia-open nvidia-utils nvidia-settings nvidia-prime`（RTX 3060 / 3070 Ti；上游自 590 驱动起（2025-12）已用开源内核模块 `nvidia-open` 取代闭源 `nvidia` 包，适用于 Turing / RTX 20 及更新显卡）
-* 内核参数追加 `nvidia-drm.modeset=1`（混合显卡 KMS / Wayland 需要）
-* NVIDIA 电源管理由驱动内置处理（560+ 起 DRM 默认开启，不再需要旧的 `nvidia-suspend` 等 systemd 单元）
+* **不安装任何独立显卡驱动**：系统使用内核自带的 Intel 核显驱动（i915）+ `linux-firmware`。RTX 独显不会被驱动，保持空闲不耗电；需要时见 [安装独显驱动](#安装独显驱动可选)
 * Alder Lake 声卡固件：`sof-firmware` + `alsa-ucm-conf`（已有）
 * Intel 无线/蓝牙：`linux-firmware` + `bluez`（已有）
 * TLP 电源管理（已有）
@@ -54,7 +52,7 @@
 
 ### 系统配置
 
-自动完成：时区（Asia/Shanghai）、Locale、主机名、用户创建、sudo、NetworkManager、systemd-timesyncd、蓝牙、TLP、NVIDIA 内核参数（`nvidia-drm.modeset=1`）。
+自动完成：时区（Asia/Shanghai）、Locale、主机名、用户创建、sudo、NetworkManager、systemd-timesyncd、蓝牙、TLP。**不修改 GRUB 内核参数**（保留发行版默认的 `loglevel=3 quiet`）。
 
 ### 安装日志 / 彩色进度
 
@@ -67,12 +65,10 @@
 | 变量 | 默认 | 说明 |
 | ---- | ---- | ---- |
 | `ENABLE_OS_PROBER` | `1` | 在 Arch GRUB 菜单里加入 Windows 入口。`0` = 完全独立，只靠 F12 选盘 |
-| `INSTALL_NVIDIA` | `1` | 安装 NVIDIA 驱动（`nvidia-open` 开源内核模块 + `nvidia-utils` 等；安装失败会自动跳过、不中断安装） |
-| `NVIDIA_DRM_MODESET` | `1` | 追加 `nvidia-drm.modeset=1` 内核参数 |
 | `MIRROR_COUNTRY` | `CN` | reflector 镜像源国家 |
 | `MIRROR_AGE` / `MIRROR_PROTOCOL` | `12` / `https` | reflector 参数 |
 
-示例：`ENABLE_OS_PROBER=0 INSTALL_NVIDIA=0 ./install.sh`
+示例：`ENABLE_OS_PROBER=0 ./install.sh`
 
 ---
 
@@ -164,18 +160,42 @@ chmod +x install.sh
 
 ## 🔧 安装后的系统组件与常用操作
 
-脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager、Bluetooth、TLP、NVIDIA 驱动。**不安装、也不配置 Snapper / grub-btrfs。**
+脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager、Bluetooth、TLP。**不安装任何独立显卡驱动，也不安装/配置 Snapper 与 grub-btrfs。**
 
 ```bash
 # 如果 GRUB 菜单里没有 Windows 入口，重新生成一次：
 sudo os-prober && sudo grub-mkconfig -o /boot/grub/grub.cfg
 
-# 独显程序（混合显卡下用核显输出，独显跑负载）：
-prime-run <command>
-
 # 如果 Windows 与 Arch 时间相差 8 小时（Windows 管理员命令行执行一次）：
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f
 ```
+
+### 安装独显驱动（可选）
+
+脚本刻意**不碰独显**：装完直接用 Intel 核显（i915）就已经有完整桌面、视频和 Wayland 支持，RTX 独显不被驱动、保持空闲。需要独显跑游戏 / CUDA 时再手动装：
+
+```bash
+# 1) 装驱动（RTX 20 系 / GTX 16 系及更新适用）
+sudo pacman -Syu
+sudo pacman -S nvidia-open nvidia-utils nvidia-settings nvidia-prime
+
+# 2) 追加 DRM KMS 内核参数（混合显卡下 Wayland / rootless Xorg 需要）
+sudo sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet nvidia-drm.modeset=1"|' /etc/default/grub
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+# 3) 重建 initramfs 并重启
+sudo mkinitcpio -P
+sudo reboot
+
+# 4) 验证
+nvidia-smi
+prime-run glxinfo | grep "OpenGL renderer"   # 应显示 NVIDIA
+```
+
+> * 需要 Turing（RTX 20 / GTX 16）及更新的显卡；更老的 Pascal（GTX 10 系）要用 AUR 的 `nvidia-580xx-dkms`。
+> * 装驱动后**必须重启**，DRM KMS 参数只在启动时生效；务必先 `grub-mkconfig` 再重启。
+> * 混合显卡下默认仍由核显输出，用 `prime-run <命令>` 让指定程序跑在独显上。
+> * 想撤销：`sudo pacman -Rns nvidia-open nvidia-utils nvidia-settings nvidia-prime`，并删掉上面那段内核参数后重新 `grub-mkconfig`。不装驱动时系统没有 nouveau，也不会与 NVIDIA 模块冲突。
 
 ### 安装后启用快照
 
@@ -250,18 +270,7 @@ BIOS 存储模式处于 VMD/RST，需切到 AHCI（切换步骤见上，先让 W
 1. 检查网络、ISO 是否最新
 2. 确认 UEFI 启动、Secure Boot 状态
 3. 查看日志（脚本运行时会打印日志路径，也可在失败提示中找到）
-4. 若失败信息包含 `target not found: nvidia` 或其它 NVIDIA 包缺失：见下方 NVIDIA 常见问题（上游包名已于 2025-12 变更，脚本已适配，通常换镜像重试即可）
-
----
-
-### 报错 `error: target not found: nvidia`？
-
-Arch 上游在 2025-12 的 590 驱动更新中移除了闭源的 `nvidia` 包，改用开源内核模块 `nvidia-open`（官方支持 Turing / RTX 20 及以上；RTX 30/40/50 与 GTX 16 系均适用）。本脚本已同步改用 `nvidia-open nvidia-utils nvidia-settings nvidia-prime`：
-
-* 若安装时仍报 `target not found: nvidia*`，说明所选镜像的 `extra` 仓库数据过期或不完整，先刷新镜像再重试：
-  `reflector --country CN --latest 10 --protocol https --sort rate --save /etc/pacman.d/mirrorlist`
-  脚本此时会自动跳过 NVIDIA 继续完成安装（日志会给出 WARN 及后续补救命令），不会中断整个安装。
-* 若显卡是 Pascal（GTX 10 系）或更老：`nvidia-open` 不支持，需要 AUR 的 `nvidia-580xx-dkms`（可先 `INSTALL_NVIDIA=0 ./install.sh` 完成安装后再手动装）。
+4. 脚本不再安装任何独显驱动，所以不会出现 `target not found: nvidia` 这类错误；若手动装驱动时遇到，见 [安装独显驱动](#安装独显驱动可选)
 
 ---
 

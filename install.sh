@@ -11,7 +11,7 @@ readonly MIRROR_AGE="${MIRROR_AGE:-12}"
 readonly MIRROR_PROTOCOL="${MIRROR_PROTOCOL:-https}"
 
 # -----------------------------------------------------------------------------
-# Dual-boot / hardware toggles
+# Dual-boot toggles
 #   Defaults target: Lenovo Legion Y9000P 2022 (12th-gen Intel + RTX 30 series)
 #   with Windows on ONE NVMe SSD and Arch Linux installed on the OTHER SSD.
 #   Each OS keeps its own EFI partition and bootloader on its own disk.
@@ -20,16 +20,6 @@ readonly MIRROR_PROTOCOL="${MIRROR_PROTOCOL:-https}"
 # *detects* the Windows bootloader on the other disk and adds a chainload entry;
 # it never writes to the Windows disk.
 readonly ENABLE_OS_PROBER="${ENABLE_OS_PROBER:-1}"
-# Install the NVIDIA driver for the RTX dGPU during pacstrap. Upstream replaced
-# the closed-source `nvidia` package with the open kernel modules
-# (nvidia-open) when the 590 driver shipped (2025-12); nvidia-open supports
-# Turing (GTX 16xx / RTX 20) and newer GPUs - the Y9000P 2022's RTX 3060/3070
-# Ti (Ampere) included. Install set: nvidia-open nvidia-utils nvidia-settings
-# nvidia-prime.
-readonly INSTALL_NVIDIA="${INSTALL_NVIDIA:-1}"
-# Append nvidia-drm.modeset=1 to the kernel cmdline (early KMS; required by most
-# Wayland/X sessions on hybrid-graphics laptops; harmless for console use).
-readonly NVIDIA_DRM_MODESET="${NVIDIA_DRM_MODESET:-1}"
 
 # Declare separately from the command substitution so a failing $(...) still
 # aborts under `set -e` (readonly would otherwise mask its exit status).
@@ -44,10 +34,6 @@ TARGET_DISK=""
 EFI_PART=""
 ROOT_PART=""
 
-# Set to 1 once the NVIDIA driver packages were actually installed. It stays 0
-# when INSTALL_NVIDIA=1 but the repositories cannot provide the packages, so
-# NVIDIA-specific configuration (kernel param, notes) is skipped consistently.
-NVIDIA_INSTALLED=0
 HOSTNAME="archlinux"
 USERNAME=""
 
@@ -612,8 +598,8 @@ install_base_system() {
     local microcode=""
     microcode="$(get_microcode_package || true)"
 
-    # Base packages only - NVIDIA support is optional and is handled below in a
-    # way that can never abort the base installation.
+    # Graphics: mesa + the Intel i915 stack come from `linux-firmware` and the
+    # in-kernel driver. No discrete-GPU driver is installed here.
     local packages=(
         base linux linux-firmware
         btrfs-progs
@@ -634,67 +620,8 @@ install_base_system() {
         warn "Unable to detect CPU microcode package."
     fi
 
-    # -------------------------------------------------------------------------
-    # Preferred path: everything (base + NVIDIA) in ONE pacstrap so the NVIDIA
-    # kernel module and the `linux` kernel are guaranteed to match.
-    #
-    # Driver set: nvidia-open nvidia-utils nvidia-settings nvidia-prime.
-    # The old closed-source `nvidia` package no longer exists in the Arch
-    # repos (upstream 590 driver switch, 2025-12), so requesting it aborts
-    # pacstrap with "error: target not found: nvidia". If the repos still
-    # cannot provide the driver (stale/incomplete mirror db), we fall back to
-    # a base-only pacstrap below instead of failing the whole installation.
-    # -------------------------------------------------------------------------
-    if (( INSTALL_NVIDIA )); then
-        info "NVIDIA driver requested (INSTALL_NVIDIA=1):"
-        info "  nvidia-open nvidia-utils nvidia-settings nvidia-prime"
-        if pacstrap -K /mnt \
-            "${packages[@]}" \
-            nvidia-open nvidia-utils nvidia-settings nvidia-prime; then
-            NVIDIA_INSTALLED=1
-            ok "Base system installed (with NVIDIA driver)."
-            return 0
-        fi
-
-        warn "Installing the base system together with the NVIDIA packages failed."
-        warn "Retrying with the base packages only; NVIDIA is re-attempted in a"
-        warn "separate step (install_nvidia_after_base) and can no longer abort"
-        warn "the installation."
-        if ! pacstrap -K /mnt "${packages[@]}"; then
-            die "Failed to install the base system even without the NVIDIA packages."
-        fi
-        warn "Base system installed WITHOUT the NVIDIA driver."
-        return 0
-    fi
-
     pacstrap -K /mnt "${packages[@]}" || die "Failed to install base system."
     ok "Base system installed."
-}
-
-install_nvidia_after_base() {
-    # Only reached when INSTALL_NVIDIA=1 and the combined pacstrap above could
-    # not install the driver. Gives the NVIDIA set one more isolated attempt
-    # now that the base system is in place. Failure here only warns.
-    (( INSTALL_NVIDIA )) || return 0
-    if (( NVIDIA_INSTALLED )); then
-        return 0
-    fi
-
-    info "Attempting NVIDIA driver installation as a separate step..."
-    if pacstrap -K /mnt \
-        nvidia-open nvidia-utils nvidia-settings nvidia-prime; then
-        NVIDIA_INSTALLED=1
-        ok "NVIDIA driver installed."
-        return 0
-    fi
-
-    warn "The NVIDIA driver could not be installed from the current mirrors."
-    warn "The system will still boot, using the Intel iGPU (RTX dGPU idle)."
-    warn "After this installation completes, fix the mirrors and run on Arch:"
-    warn "  sudo pacman -Syy"
-    warn "  sudo pacman -S nvidia-open nvidia-utils nvidia-settings nvidia-prime"
-    warn "  sudo mkinitcpio -P"
-    return 0
 }
 
 generate_fstab() {
@@ -750,10 +677,6 @@ systemctl enable bluetooth
 # Enable laptop power management
 systemctl enable tlp
 systemctl mask systemd-rfkill.service systemd-rfkill.socket 2>/dev/null || true
-
-# NOTE: no nvidia-suspend/-hibernate/-resume units are enabled here - the
-# current open-module driver (nvidia-utils 560+) enables DRM by default and no
-# longer ships those systemd units.
 EOF
     ok "Basic system configuration completed."
 }
@@ -788,24 +711,6 @@ create_user() {
     printf '\n'
     arch-chroot /mnt passwd root
     ok "User created."
-}
-
-configure_kernel_cmdline() {
-    # No swap is created, so there is no hibernation/suspend-to-disk and no
-    # `resume=` parameter (nor the initramfs `resume` hook) to configure.
-    # The NVIDIA early-KMS parameter is kept: it is independent of swap and is
-    # required by most Wayland/X sessions on hybrid-graphics laptops.
-    if (( ! NVIDIA_INSTALLED || ! NVIDIA_DRM_MODESET )); then
-        info "Kernel cmdline left at distribution default (no NVIDIA KMS requested)."
-        return 0
-    fi
-
-    local kernel_cmdline="quiet nvidia-drm.modeset=1"
-    info "GRUB kernel cmdline: $kernel_cmdline"
-    sed -i \
-        "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$kernel_cmdline\"|" \
-        /mnt/etc/default/grub
-    ok "NVIDIA DRM kernel modeset configured."
 }
 
 # -----------------------------------------------------------------------------
@@ -921,22 +826,6 @@ finish_installation() {
 
     ok "Installation completed successfully."
 
-    if (( NVIDIA_INSTALLED )); then
-        cat <<'NOTE'
-* NVIDIA driver (nvidia-open) was installed; launch apps on the RTX dGPU with:
-      prime-run <command>
-NOTE
-    elif (( INSTALL_NVIDIA )); then
-        cat <<'NOTE'
-* NVIDIA was requested but could NOT be installed from the current mirrors
-  (see the warnings above). The system will boot using the Intel iGPU. To add
-  the NVIDIA driver later, run on Arch:
-      sudo pacman -Syy
-      sudo pacman -S nvidia-open nvidia-utils nvidia-settings nvidia-prime
-      sudo mkinitcpio -P
-NOTE
-    fi
-
     cat <<EOF
 
 =====================================
@@ -996,13 +885,11 @@ main() {
     mount_filesystems
 
     install_base_system
-    install_nvidia_after_base
     generate_fstab
 
     configure_system
     create_user
 
-    configure_kernel_cmdline
     install_grub
     reorder_boot_entries
 
