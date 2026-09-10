@@ -105,7 +105,6 @@ init_logging() {
 # -----------------------------------------------------------------------------
 on_error() {
     local exit_code=$?
-    set +e
     if (( USE_COLOR )); then
         printf '\n%s[FAIL]%s Unexpected error (exit=%d, line=%s)\n' \
             "${C_RED}${C_BOLD}" "${C_RESET}" \
@@ -432,6 +431,12 @@ confirm_disk() {
     printf '\n'
     lsblk "$TARGET_DISK"
     printf '\n'
+    printf 'It will be WIPED and repartitioned as:\n'
+    printf '  %s  1 GiB  EFI (FAT32)  -> /boot/efi\n' \
+        "$(get_partition_name "$TARGET_DISK" 1)"
+    printf '  %s  rest   Btrfs root   -> /\n' \
+        "$(get_partition_name "$TARGET_DISK" 2)"
+    printf '\n'
 
     local answer
     read -rp "Type YES to continue: " answer
@@ -489,17 +494,13 @@ partition_disk() {
     EFI_PART="$(get_partition_name "$TARGET_DISK" 1)"
     ROOT_PART="$(get_partition_name "$TARGET_DISK" 2)"
 
+    # Layout is fixed, so no second confirmation is asked here: confirm_disk()
+    # already required YES (plus ERASE when the disk looks like Windows data).
     printf '\n'
     printf 'Partition layout:\n'
     printf '  EFI  : %s\n' "$EFI_PART"
     printf '  ROOT : %s\n' "$ROOT_PART"
     printf '\n'
-
-    local answer
-    read -rp "Continue partitioning? Type YES: " answer
-    if [[ "$answer" != "YES" ]]; then
-        die "Partitioning cancelled."
-    fi
 
     sgdisk --zap-all "$TARGET_DISK"
     sgdisk \
@@ -557,7 +558,7 @@ mount_filesystems() {
     # -------------------------------------------------------------------------
     # Step 3: Create mount-point directories INSIDE @ (must come AFTER @ mount).
     # -------------------------------------------------------------------------
-    mkdir -p /mnt/home /mnt/boot/efi
+    mkdir /mnt/home /mnt/boot/efi
 
     # -------------------------------------------------------------------------
     # Step 4: Mount home subvolume
@@ -604,13 +605,13 @@ install_base_system() {
         base linux linux-firmware
         btrfs-progs
         grub efibootmgr os-prober
-        fuse3 ntfs-3g
+        ntfs-3g
         networkmanager
         bluez bluez-utils
         pipewire pipewire-pulse wireplumber mesa
-        linux-headers git sudo vim base-devel
+        git sudo vim base-devel
         tlp xf86-input-libinput
-        sof-firmware alsa-ucm-conf acpi
+        sof-firmware alsa-ucm-conf
     )
 
     if [[ -n "$microcode" ]]; then
@@ -750,13 +751,11 @@ install_grub() {
                 --bootloader-id=Arch \
                 --recheck
 
-            # os-prober inspects the OTHER SSD (Windows disk, untouched by this
-            # installer) and appends a "Windows Boot Manager" chainload entry.
-            # Windows keeps its own bootloader on its own disk either way.
-            if [ "$ENABLE_OS_PROBER" = "1" ]; then
-                os-prober || true
-            fi
-
+            # grub-mkconfig runs os-prober itself (GRUB_DISABLE_OS_PROBER=false
+            # above), which inspects the OTHER SSD - the Windows disk, untouched
+            # by this installer - and appends a "Windows Boot Manager"
+            # chainload entry. Windows keeps its own bootloader on its own disk
+            # either way.
             grub-mkconfig -o /boot/grub/grub.cfg
         '
     ok "GRUB installation completed."
@@ -840,7 +839,7 @@ The Windows SSD (the other disk) was left untouched.
 * Boot into Windows:    pick 'Windows Boot Manager' at F12, or choose it from
   the Arch GRUB menu (os-prober only *detects* it; Windows is never modified).
 * If Windows is missing from the GRUB menu after reboot, run on Arch:
-      sudo os-prober && sudo grub-mkconfig -o /boot/grub/grub.cfg
+      sudo grub-mkconfig -o /boot/grub/grub.cfg
 * Clock skew between Windows and Arch (an 8 h difference): run once in Windows
   as administrator:
       reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f

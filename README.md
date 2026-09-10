@@ -163,8 +163,9 @@ chmod +x install.sh
 脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager、Bluetooth、TLP。**不安装任何独立显卡驱动，也不安装/配置 Snapper 与 grub-btrfs。**
 
 ```bash
-# 如果 GRUB 菜单里没有 Windows 入口，重新生成一次：
-sudo os-prober && sudo grub-mkconfig -o /boot/grub/grub.cfg
+# 如果 GRUB 菜单里没有 Windows 入口，重新生成一次
+# （grub-mkconfig 会自动调用 os-prober）：
+sudo grub-mkconfig -o /boot/grub/grub.cfg
 
 # 如果 Windows 与 Arch 时间相差 8 小时（Windows 管理员命令行执行一次）：
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f
