@@ -163,7 +163,7 @@ check_commands() {
     # inside the chroot (e.g. grub-install, grub-mkconfig) come from packages
     # installed by pacstrap and are deliberately not checked here.
     local commands=(
-        curl date sleep tee timedatectl uname lsblk findmnt od
+        curl date sleep tee timedatectl uname lsblk findmnt od blkid wipefs
         sgdisk partprobe mkfs.fat mkfs.btrfs btrfs
         mount umount mountpoint
         pacman pacstrap genfstab arch-chroot
@@ -352,6 +352,58 @@ list_disks() {
     printf '\n'
 }
 
+list_signatures() {
+    # Read-only inventory of what is still *on* the selected disk. Rewriting
+    # the partition table (sgdisk --zap-all) does not erase partition contents,
+    # so old filesystems, swap headers and RAID/LVM metadata survive on the new
+    # partitions. That matters twice over:
+    #   - it is the last chance to notice that the wrong disk was picked: the
+    #     signatures below belong to data this installer is about to destroy;
+    #   - stale signatures stay visible to libblkid, and a leftover mkswap
+    #     header (SWAPSPACE2 at offset 0xff6) makes mount autodetect the type
+    #     "swap" and fail with "unknown filesystem type 'swap'". partition_disk()
+    #     clears them with wipefs; this report only shows what is there.
+    # wipefs --no-act writes nothing. Partition-table signatures (gpt/PMBR/dos)
+    # are filtered out: those are the disk's own tables, not old data.
+    local device line
+    local found=0
+    local devices=()
+    while IFS= read -r device; do
+        [[ -n "$device" ]] && devices+=("$device")
+    done < <( lsblk --paths --list --output NAME "$TARGET_DISK" 2>/dev/null || true )
+    if (( ${#devices[@]} == 0 )); then
+        devices=("$TARGET_DISK")
+    fi
+
+    printf '\n'
+    printf 'Signatures currently on %s (read-only check, all of it will be erased):\n' \
+        "$TARGET_DISK"
+    for device in "${devices[@]}"; do
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            printf '  %-16s %s\n' "$device" "$line"
+            found=1
+        done < <( wipefs \
+            --no-act \
+            --noheadings \
+            --output TYPE,OFFSET,UUID \
+            "$device" 2>/dev/null \
+            | awk '$1 != "gpt" && $1 != "PMBR" && $1 != "dos"' || true )
+    done
+
+    if (( found )); then
+        printf '\n'
+        warn "The signatures above are old data: partitioning destroys them."
+        warn "If that is not what you want, stop and re-check the disk (model/serial)."
+    else
+        printf '  (no signature found at the offsets wipefs probes)\n'
+        if (( ${#devices[@]} <= 1 )); then
+            printf '  Note: there is no partition table here, so data hidden inside\n'
+            printf '  former partitions stays invisible until wipefs clears it later.\n'
+        fi
+    fi
+}
+
 validate_disk() {
     local disk="$1"
     [[ -b "$disk" ]] || return 1
@@ -397,6 +449,9 @@ confirm_disk() {
     printf 'WARNING: ALL DATA ON THIS DISK WILL BE ERASED.\n'
     printf '\n'
     lsblk "$TARGET_DISK"
+
+    list_signatures
+
     printf '\n'
     printf 'It will be WIPED and repartitioned as:\n'
     printf '  %s  1 GiB  EFI (FAT32)  -> /boot/efi\n' \
@@ -484,8 +539,42 @@ partition_disk() {
         die "Partition nodes did not appear: $EFI_PART $ROOT_PART"
     fi
 
+    # A rewritten partition table does not erase partition contents, and
+    # libblkid probes swap before btrfs/ext4: a stale mkswap header left at the
+    # start of the new root partition would hijack mount's type detection and
+    # abort the install with "unknown filesystem type 'swap'". Never rely on
+    # mkfs or on autodetection here - erase the old signatures explicitly.
+    # No --force: that would also erase nested partition tables, and the disk's
+    # own backup GPT lives inside the last partition.
+    wipefs --all "$EFI_PART" "$ROOT_PART"
+
     mkfs.fat -F32 "$EFI_PART"
     mkfs.btrfs -f "$ROOT_PART"
+
+    # Sanity checks. wipefs lists signatures individually, while blkid reports
+    # nothing at all once a device carries several of them - so verify with
+    # wipefs, and fail loudly instead of mounting something unexpected.
+    local signatures
+    signatures="$( wipefs \
+        --no-act --noheadings --output TYPE --types btrfs \
+        "$ROOT_PART" 2>/dev/null || true )"
+    if [[ "$signatures" != "btrfs" ]]; then
+        die "No btrfs signature on $ROOT_PART after mkfs."
+    fi
+
+    signatures="$( wipefs \
+        --no-act --noheadings --output TYPE --types vfat \
+        "$EFI_PART" 2>/dev/null || true )"
+    if [[ "$signatures" != "vfat" ]]; then
+        die "No FAT signature on $EFI_PART after mkfs."
+    fi
+
+    signatures="$( wipefs \
+        --no-act --noheadings --output TYPE --types swap \
+        "$EFI_PART" "$ROOT_PART" 2>/dev/null || true )"
+    if [[ -n "$signatures" ]]; then
+        die "Stale swap signature still present: $signatures"
+    fi
 
     ok "Partitioning completed."
 }
@@ -502,7 +591,11 @@ mount_filesystems() {
     #         subvolumes. No /.snapshots is created: the layout stays
     #         snapshot-ready for a later Snapper setup.
     # -------------------------------------------------------------------------
-    mount "$ROOT_PART" /mnt
+    # Explicit -t everywhere: without it the type is autodetected from the
+    # device content, and a stale signature (e.g. a leftover swap header on a
+    # reused disk) can make mount pick a filesystem that cannot be mounted at
+    # all - "unknown filesystem type 'swap'".
+    mount -t btrfs "$ROOT_PART" /mnt
     btrfs subvolume create /mnt/@
     btrfs subvolume create /mnt/@home
     sync
@@ -511,7 +604,7 @@ mount_filesystems() {
     # -------------------------------------------------------------------------
     # Step 2: Mount @ (root) subvolume FIRST
     # -------------------------------------------------------------------------
-    mount -o "$btrfs_opts",subvol=@ "$ROOT_PART" /mnt
+    mount -t btrfs -o "$btrfs_opts",subvol=@ "$ROOT_PART" /mnt
 
     # -------------------------------------------------------------------------
     # Step 3: Create mount-point directories INSIDE @ (must come AFTER @ mount).
@@ -521,12 +614,12 @@ mount_filesystems() {
     # -------------------------------------------------------------------------
     # Step 4: Mount home subvolume
     # -------------------------------------------------------------------------
-    mount -o "$btrfs_opts",subvol=@home "$ROOT_PART" /mnt/home
+    mount -t btrfs -o "$btrfs_opts",subvol=@home "$ROOT_PART" /mnt/home
 
     # -------------------------------------------------------------------------
     # Step 5: Mount EFI
     # -------------------------------------------------------------------------
-    mount -o umask=0077 "$EFI_PART" /mnt/boot/efi
+    mount -t vfat -o umask=0077 "$EFI_PART" /mnt/boot/efi
 
     # -------------------------------------------------------------------------
     # Step 6: Verify all mount points
