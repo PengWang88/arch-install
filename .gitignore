@@ -1,0 +1,2 @@
+# Runtime installation logs (one file per run, written by install.sh).
+log/
