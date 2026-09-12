@@ -539,6 +539,23 @@ get_partition_name() {
     fi
 }
 
+# All signatures wipefs reports on the given device, one TYPE per line.
+# Empty output for a device that carries none.
+signature_types() {
+    wipefs \
+        --no-act --noheadings --output TYPE "$@" 2>/dev/null \
+        | awk 'NF' || true
+}
+
+# True when wipefs reports at least one signature of exactly the given type.
+# Membership, not equality: libblkid may report several signatures of the same
+# type for one filesystem (FAT32 yields three "vfat" entries).
+has_signature() {
+    local expected="$1"
+    shift
+    signature_types "$@" | grep -qxF -- "$expected"
+}
+
 partition_disk() {
     cleanup_disk_state
     assert_disk_unused
@@ -593,24 +610,26 @@ partition_disk() {
     # Sanity checks. wipefs lists signatures individually, while blkid reports
     # nothing at all once a device carries several of them - so verify with
     # wipefs, and fail loudly instead of mounting something unexpected.
+    #
+    # NOTE: one filesystem can report SEVERAL lines with the same TYPE, because
+    # libblkid registers every magic that matches. A fresh FAT32 filesystem is
+    # exactly that case: it emits "vfat" three times (the FAT32 name at 0x52,
+    # the boot jump at 0x0 and the 0x55aa boot signature at 0x1fe). Comparing
+    # the whole output against the string "vfat" therefore failed even on a
+    # perfectly formatted EFI partition. Require a line instead of equality.
     local signatures
-    signatures="$( wipefs \
-        --no-act --noheadings --output TYPE --types btrfs \
-        "$ROOT_PART" 2>/dev/null || true )"
-    if [[ "$signatures" != "btrfs" ]]; then
-        die "No btrfs signature on $ROOT_PART after mkfs."
+    if ! has_signature "btrfs" "$ROOT_PART"; then
+        die "No btrfs signature on $ROOT_PART after mkfs: $( signature_types "$ROOT_PART" )"
     fi
 
-    signatures="$( wipefs \
-        --no-act --noheadings --output TYPE --types vfat \
-        "$EFI_PART" 2>/dev/null || true )"
-    if [[ "$signatures" != "vfat" ]]; then
-        die "No FAT signature on $EFI_PART after mkfs."
+    if ! has_signature "vfat" "$EFI_PART"; then
+        die "No FAT signature on $EFI_PART after mkfs: $( signature_types "$EFI_PART" )"
     fi
 
     signatures="$( wipefs \
         --no-act --noheadings --output TYPE --types swap \
-        "$EFI_PART" "$ROOT_PART" 2>/dev/null || true )"
+        "$EFI_PART" "$ROOT_PART" 2>/dev/null \
+        | awk 'NF' || true )"
     if [[ -n "$signatures" ]]; then
         die "Stale swap signature still present: $signatures"
     fi
