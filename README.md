@@ -17,7 +17,7 @@
 
 * 支持 UEFI 启动模式
 * 自动检测 Arch Linux 安装环境
-* 自动配置 pacman 镜像源（默认中国区，可用 `MIRROR_COUNTRY` 覆盖）
+* 自动配置 pacman 镜像源：写入固定的中国镜像列表（不再调用 reflector 做联网测速排序），按序探测并自动剔除不可达的源
 * GPT 分区方案，全部落在**目标盘**上：
   * 1 GiB EFI 分区
   * Btrfs 根分区（占剩余全部空间）
@@ -64,10 +64,20 @@
 | 变量 | 默认 | 说明 |
 | ---- | ---- | ---- |
 | `ENABLE_OS_PROBER` | `1` | 在 Arch GRUB 菜单里加入 Windows 入口。`0` = 完全独立，只靠 F12 选盘 |
-| `MIRROR_COUNTRY` | `CN` | reflector 镜像源国家 |
-| `MIRROR_AGE` / `MIRROR_PROTOCOL` | `12` / `https` | reflector 参数 |
 
 示例：`ENABLE_OS_PROBER=0 ./install.sh`
+
+### 关于镜像源
+
+`install.sh` 中的 `MIRROR_URLS` 数组是**唯一**的镜像配置入口，默认按顺序使用：
+
+```
+mirrors.ustc.edu.cn → mirrors.aliyun.com → mirrors.nju.edu.cn
+→ mirrors.huaweicloud.com → mirrors.cloud.tencent.com
+→ mirrors.cernet.edu.cn → mirrors.tuna.tsinghua.edu.cn
+```
+
+安装时脚本会逐个请求 `core/os/x86_64/core.db` 探测可用性，只把能正常响应的源写入 `/etc/pacman.d/mirrorlist`（原文件备份为 `mirrorlist.iso-backup`）。因此某个源被网络屏蔽（例如返回 403）时会自动跳过，而不是让整个安装失败。想增删或调整优先级，直接改这个数组即可。
 
 ---
 
