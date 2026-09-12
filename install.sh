@@ -608,8 +608,10 @@ mount_filesystems() {
 
     # -------------------------------------------------------------------------
     # Step 3: Create mount-point directories INSIDE @ (must come AFTER @ mount).
+    # -p is REQUIRED: @ is a freshly created, EMPTY subvolume, so /mnt/boot does
+    # not exist yet and plain mkdir cannot create the nested /mnt/boot/efi.
     # -------------------------------------------------------------------------
-    mkdir /mnt/home /mnt/boot/efi
+    mkdir -p /mnt/home /mnt/boot/efi
 
     # -------------------------------------------------------------------------
     # Step 4: Mount home subvolume
