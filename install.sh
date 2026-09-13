@@ -25,9 +25,10 @@ readonly MIRROR_URLS=(
 # Dual-boot behaviour (hardcoded, no toggles)
 # -----------------------------------------------------------------------------
 # Target: Y9000P 2022, Windows on one NVMe SSD and Arch on the other, each with
-# its own ESP and bootloader. os-prober is always enabled, so GRUB always shows
-# a "Windows Boot Manager" entry; it only detects that bootloader, never writes
-# to the Windows disk.
+# its own ESP and bootloader. The two disks stay completely independent: Arch's
+# GRUB menu contains Arch only, and switching OS is done in the firmware boot
+# menu (F12) or the BIOS boot order. os-prober is deliberately NOT installed and
+# no Windows entry is ever generated; the Windows disk is never read or written.
 
 # Assignment must precede `readonly` (the reverse aborts on every run), and
 # keeping it separate stops `readonly` from masking a failing $(...) under -e.
@@ -635,7 +636,7 @@ install_base_system() {
     local packages=(
         base linux linux-firmware
         btrfs-progs
-        grub efibootmgr os-prober
+        grub efibootmgr
         ntfs-3g
         networkmanager
         pipewire pipewire-pulse wireplumber mesa
@@ -749,22 +750,14 @@ install_grub() {
 
     arch-chroot /mnt bash -c '
         set -e
-        # os-prober is hardcoded ON; append the key if the file lacks it, since
-        # a sed that matches nothing would leave os-prober disabled.
-        if grep -q "^#\?GRUB_DISABLE_OS_PROBER=" /etc/default/grub; then
-            sed -i "s|^#\?GRUB_DISABLE_OS_PROBER=.*|GRUB_DISABLE_OS_PROBER=false|" /etc/default/grub
-        else
-            echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
-        fi
-
         grub-install \
             --target=x86_64-efi \
             --efi-directory=/boot/efi \
             --bootloader-id=Arch \
             --recheck
 
-        # grub-mkconfig runs os-prober: adds the "Windows Boot Manager" entry
-        # from the other disk (read-only detection, Windows is never modified).
+        # Arch only: os-prober is not installed and GRUB_DISABLE_OS_PROBER is
+        # left at its default, so this menu never gains a Windows entry.
         grub-mkconfig -o /boot/grub/grub.cfg
     '
     ok "GRUB installation completed."
@@ -790,12 +783,13 @@ This installer only touched: $TARGET_DISK
 The Windows SSD (the other disk) was left untouched.
 
 -- Dual boot (two SSDs, one OS per disk) --
-* Boot into Arch GRUB:  press F12 at power-on and pick 'Arch' (or set it as the
+* The two disks are fully independent: this GRUB menu boots Arch only, and the
+  Windows disk is never read, mounted or written.
+* Boot into Arch:    press F12 at power-on and pick 'Arch' (or set it as the
   first boot entry in the BIOS once, and it will boot straight into GRUB).
-* Boot into Windows:    pick 'Windows Boot Manager' at F12, or choose it from
-  the Arch GRUB menu (os-prober only *detects* it; Windows is never modified).
-* If Windows is missing from the GRUB menu after reboot, run on Arch:
-      sudo grub-mkconfig -o /boot/grub/grub.cfg
+* Boot into Windows: press F12 at power-on and pick 'Windows Boot Manager'.
+  Nothing else to configure: no Windows entry is added to GRUB (os-prober is
+  intentionally not installed).
 * Clock skew between Windows and Arch (an 8 h difference): run once in Windows
   as administrator:
       reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f

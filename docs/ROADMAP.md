@@ -48,7 +48,7 @@
 - [ ] `stages/60-fstab.sh` — `genfstab -U` 并回显
 - [ ] `stages/70-system-config.sh` — chroot 内时区/locale/hostname/hosts/NetworkManager/timesyncd/bluetooth/tlp
 - [ ] `stages/80-user.sh` — 建用户（wheel + bash）→ 用户密码 → sudoers → root 密码
-- [ ] `stages/90-bootloader.sh` — GRUB 安装（`--bootloader-id=Arch`）+ 固定启用 os-prober + `grub-mkconfig`（不改固件启动顺序）
+- [ ] `stages/90-bootloader.sh` — GRUB 安装（`--bootloader-id=Arch`）+ `grub-mkconfig`（不改固件启动顺序；不安装 os-prober）
 - [ ] `stages/99-finish.sh` — sync / `umount -R` / 总结（含双系统与 Windows 时钟偏移提示）
 - [ ] 每个 stage 支持单独重跑：`./install.sh --from 30-partition`
 - [ ] 回归验证：VM 里跑一次完整安装，与原脚本行为逐项比对
@@ -56,12 +56,12 @@
 
 **必须保持的既有取舍**（README 已对外承诺，迁移时不得回退）：
 
-- [ ] 仅 UEFI；不识别/不写入 Windows 盘；os-prober 仅只读检测
+- [ ] 仅 UEFI；不识别/不挂载/不写入 Windows 盘；不安装 os-prober（系统切换只用固件启动菜单）
 - [ ] 不建 swap、不配置休眠（hibernate）
 - [ ] 不创建 `/.snapshots` 子卷（留给 snapper 自建）
 - [ ] 系统安装阶段不装任何独显驱动
 - [ ] 不修改 GRUB 内核参数（保留发行版默认 `loglevel=3 quiet`）
-- [ ] 环境变量 `MIRROR_COUNTRY` / `ENABLE_OS_PROBER` 继续可用（镜像改为固定列表后不再有 `MIRROR_AGE` / `MIRROR_PROTOCOL`）
+- [ ] 环境变量 `MIRROR_COUNTRY` 继续可用（镜像改为固定列表后不再有 `MIRROR_AGE` / `MIRROR_PROTOCOL`）
 
 ---
 
@@ -245,7 +245,7 @@
 - [ ] `config/presets/laptop-y9000p.conf` — 本项目目标机型（核显 + 可选独显、TLP、蓝牙、键盘灯、风扇、中文）
 - [ ] `config/presets/full-desktop.conf` — KDE + 中文 + 开发 + 常用软件
 - [ ] `--preset` / `ARCH_COMPONENTS` / `ARCH_SKIP_COMPONENTS` 生效
-- [ ] 环境变量别名兼容（`MIRROR_*`、`ENABLE_OS_PROBER`）
+- [ ] 环境变量别名兼容（`MIRROR_*`）
 
 ---
 

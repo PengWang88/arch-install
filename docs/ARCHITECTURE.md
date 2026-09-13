@@ -56,7 +56,7 @@ arch-install/
 │   ├── 60-fstab.sh                 #   genfstab
 │   ├── 70-system-config.sh         #   chroot：时区/locale/hostname/hosts/服务启用
 │   ├── 80-user.sh                  #   用户创建、密码、sudoers
-│   ├── 90-bootloader.sh            #   GRUB 安装、os-prober
+│   ├── 90-bootloader.sh            #   GRUB 安装（不含 os-prober）
 │   └── 99-finish.sh                #   同步、卸载、安装总结与后续提示
 │
 ├── components/                     # 组件（仅 setup.sh 调用，装好的系统内运行）
@@ -294,14 +294,13 @@ ARCH_EFI_SIZE="1G"
 ARCH_BTRFS_OPTS="noatime,compress=zstd:3,discard=async"
 ARCH_MIRROR_COUNTRY="CN"
 ARCH_MIRROR_URLS="ustc aliyun nju huaweicloud tencent cernet tuna"
-ARCH_ENABLE_OS_PROBER=1
 
 # ---- 组件 ----
 ARCH_COMPONENTS=(zram fcitx5 kde-plasma nvidia-open)
 ARCH_SKIP_COMPONENTS=()
 ```
 
-兼容性：现有 `MIRROR_COUNTRY` / `ENABLE_OS_PROBER` 等环境变量继续识别（作为 `ARCH_*` 的别名），
+兼容性：现有 `MIRROR_COUNTRY` 等环境变量继续识别（作为 `ARCH_*` 的别名），
 不破坏已有用法。镜像源改为固定列表后，`MIRROR_AGE` / `MIRROR_PROTOCOL` 不再需要（已移除）。
 
 预设放 `config/presets/*.conf`，只声明 `ARCH_COMPONENTS`，用 `--preset <名>` 加载。
@@ -337,7 +336,7 @@ ARCH_SKIP_COMPONENTS=()
 ## 11. 非目标（明确不做）
 
 * 不支持 BIOS/Legacy 启动（维持仅 UEFI）。
-* 不识别、不写入、不修改 Windows 盘（os-prober 仅只读检测）。
+* 不识别、不挂载、不写入、不修改 Windows 盘（不安装 os-prober，也不做任何跨盘探测；系统切换交给固件启动菜单）。
 * 不建 swap 分区、不配置休眠（需要的话由组件 `zram` 或可选 `swapfile` 组件提供）。
 * 组件脚本不负责 chroot 内安装（不做 `/mnt` 前缀适配）。
 * 不托管第三方 dotfiles 内容本身，只做「拉取并链接」。

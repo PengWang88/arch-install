@@ -5,7 +5,7 @@
 * 一块 NVMe SSD 装 **Windows**（保持原样，脚本**完全不碰**这块盘）
 * 另一块 NVMe SSD 装 **Arch Linux**（脚本只在这块盘上分区/格式化）
 
-两块盘各自拥有独立的 EFI 分区和引导程序，互不干扰；开机可按 F12 选盘，或直接进 Arch 的 GRUB 菜单选择 Windows（通过 os-prober 自动检测，只读不改写 Windows 盘）。
+两块盘各自拥有独立的 EFI 分区和引导程序，**完全独立、互不干扰**：Arch 的 GRUB 菜单里只有 Arch，切换系统靠开机 **F12 / BIOS 启动顺序**选盘（脚本不安装 os-prober，也不会生成任何 Windows 条目）。
 
 > ⚠️ 注意：该脚本会对**所选的目标磁盘**进行分区和格式化操作，请确认备份数据后再使用。**脚本不做任何 Windows 分区识别**——选盘完全由你负责，务必对照磁盘列表（型号/容量/序列号）确认选对盘再输入 `YES`。
 
@@ -27,7 +27,7 @@
 ### 双系统 / 双硬盘支持
 
 * 目标盘与 Windows 盘完全隔离：只在目标盘创建 ESP 并安装 GRUB
-* os-prober 自动把 **Windows Boot Manager** 加进 Arch 的 GRUB 菜单（**写死启用**，没有开关）
+* **不安装 os-prober**：GRUB 菜单里只有 Arch，不生成任何 Windows 条目，两块盘彻底解耦（要进 Windows 就按 F12 选 `Windows Boot Manager`）
 * Secure Boot 状态检测与提示（GRUB 未签名，开启时需在 BIOS 关闭）
 * 选盘前打印全量磁盘列表（路径/容量/型号/序列号），选错盘的风险由人工承担——脚本不识别 Windows 分区
 * 装完不会改固件启动顺序（脚本不碰 `efibootmgr -o`）：默认进哪个系统由 BIOS 里的启动顺序决定，可在 BIOS 里把 `Arch` 调到第一，或每次开机按 F12 选盘
@@ -59,9 +59,9 @@
 
 ---
 
-## 🔧 镜像源与 os-prober（均已写死）
+## 🔧 镜像源（写死）
 
-`install.sh` 目前**没有任何环境变量开关**：镜像列表和 os-prober 都写死在脚本里，同一份脚本每次装出来的结果完全一致。要改就改脚本顶部对应的常量 / 数组。
+`install.sh` 目前**没有任何环境变量开关**：镜像列表写死在脚本里，同一份脚本每次装出来的结果完全一致。要改就改脚本顶部对应的常量 / 数组。
 
 ### 关于镜像源
 
@@ -139,7 +139,7 @@ chmod +x install.sh
 
 移除安装 U 盘后重启：
 
-* 开机按 **F12** 选盘：`Arch` 进 Arch GRUB（菜单里有 Arch 和 Windows Boot Manager），`Windows Boot Manager` 直接进 Windows
+* 开机按 **F12** 选盘：`Arch` 进 Arch GRUB（菜单里只有 Arch），`Windows Boot Manager` 直接进 Windows
 * 想默认进 Arch：在 BIOS 启动顺序里把 `Arch` 调到 `Windows Boot Manager` 前面（脚本不改固件启动顺序）
 
 ---
@@ -166,11 +166,10 @@ chmod +x install.sh
 
 ## 🔧 安装后的系统组件与常用操作
 
-脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager。**不安装任何独立显卡驱动、蓝牙（bluez）与 TLP 电源管理，也不安装/配置 Snapper 与 grub-btrfs。**
+脚本会自动配置：Linux Kernel、GRUB、NetworkManager。**不安装 os-prober（GRUB 菜单里只有 Arch）、不安装任何独立显卡驱动、蓝牙（bluez）与 TLP 电源管理，也不安装/配置 Snapper 与 grub-btrfs。**
 
 ```bash
-# 如果 GRUB 菜单里没有 Windows 入口，重新生成一次
-# （grub-mkconfig 会自动调用 os-prober）：
+# 改了 /etc/default/grub（内核参数等）后重新生成引导配置：
 sudo grub-mkconfig -o /boot/grub/grub.cfg
 
 # 如果 Windows 与 Arch 时间相差 8 小时（Windows 管理员命令行执行一次）：
@@ -284,7 +283,7 @@ arch-install
 
 ### 会动我的 Windows 盘吗？
 
-不会。脚本只分区/格式化**所选目标盘**，Windows 盘连 ESP 都不会被写入；os-prober 对 Windows 盘只做只读检测。唯一的风险是**手动选错盘**——脚本不识别盘上内容，选盘时请务必自己核对（这是你唯一需要小心的地方）。
+不会。脚本只分区/格式化**所选目标盘**，Windows 盘连 ESP 都不会被写入，也不会被挂载或读取（不安装 os-prober，也不做任何跨盘探测）。唯一的风险是**手动选错盘**——脚本不识别盘上内容，选盘时请务必自己核对（这是你唯一需要小心的地方）。
 
 ### 为什么 Arch 起不来 / "Verification failed"？
 
@@ -298,16 +297,35 @@ BIOS 存储模式处于 VMD/RST，需切到 AHCI（切换步骤见上，先让 W
 
 见上文注册表命令（Linux 默认硬件时钟按 UTC 处理）。
 
-### 想让两块盘完全独立、不用 GRUB 菜单选 Windows？
+### 怎么切换 Windows 和 Arch？
 
-脚本已经把 os-prober 写死启用，没有开关。若确实不想在 GRUB 里看到 Windows 入口，装完后自行在 Arch 里执行：
+开机按 **F12** 选盘：`Arch` 进 Arch 的 GRUB，`Windows Boot Manager` 直接进 Windows。也可以在 BIOS 启动顺序里把想默认启动的系统调到第一位（脚本不动固件启动顺序）。
+
+### 想让 GRUB 菜单里也出现 Windows 入口？
+
+脚本刻意不装 os-prober，装完的 GRUB 里**只有 Arch**。如果确实想要一个 Windows 菜单项，装好后自己在 Arch 里加（两种方式任选）：
 
 ```bash
-sudo sed -i 's|^#\?GRUB_DISABLE_OS_PROBER=.*|GRUB_DISABLE_OS_PROBER=true|' /etc/default/grub
+# 方式一：装 os-prober 并挂载 Windows 的 ESP（先 lsblk/blkid 确认是哪个分区）
+sudo pacman -S os-prober fuse3        # fuse3 是 grub-mount 的必需依赖，可选依赖不会自动装
+sudo mkdir -p /boot/efi-win
+sudo mount /dev/nvme1n1p1 /boot/efi-win
+sudo os-prober                        # 应输出 .../EFI/Microsoft/Boot/bootmgfw.efi:Windows Boot Manager
 sudo grub-mkconfig -o /boot/grub/grub.cfg
+# 注意：os-prober 只认已挂载的分区，每次 grub-mkconfig 前都要重新挂载，否则条目会丢
 ```
 
-之后只用 F12 选盘即可。
+```sh
+# 方式二（更稳，不依赖 os-prober）：用 UUID 直接 chainload
+# 先用 blkid /dev/nvme1n1p1 取 UUID，再写进 /etc/grub.d/40_custom：
+menuentry "Windows Boot Manager" --class windows --class os {
+    insmod part_gpt
+    insmod fat
+    search --no-floppy --fs-uuid --set=root XXXX-XXXX
+    chainloader /EFI/Microsoft/Boot/bootmgfw.efi
+}
+# 然后 sudo grub-mkconfig -o /boot/grub/grub.cfg
+```
 
 ### 是否支持 BIOS Legacy 启动？
 
