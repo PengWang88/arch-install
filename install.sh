@@ -2,15 +2,11 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-# -----------------------------------------------------------------------------
-# Global constants
-# -----------------------------------------------------------------------------
 readonly PROJECT_NAME="arch-install"
 readonly MIRROR_COUNTRY="CN"
 readonly MIRRORLIST="/etc/pacman.d/mirrorlist"
 
-# Fixed mirrors, written verbatim in this order: no reflector, no probing. The
-# first entry is always the primary; edit this array to change the mirrors.
+# Written verbatim, in priority order: no reflector, no probing. Edit to change.
 readonly MIRROR_URLS=(
     "https://mirrors.ustc.edu.cn/archlinux"
     "https://mirrors.aliyun.com/archlinux"
@@ -21,14 +17,10 @@ readonly MIRROR_URLS=(
     "https://mirrors.tuna.tsinghua.edu.cn/archlinux"
 )
 
-# -----------------------------------------------------------------------------
-# Dual-boot behaviour (hardcoded, no toggles)
-# -----------------------------------------------------------------------------
-# Target: Y9000P 2022, Windows on one NVMe SSD and Arch on the other, each with
-# its own ESP and bootloader. The two disks stay completely independent: Arch's
-# GRUB menu contains Arch only, and switching OS is done in the firmware boot
-# menu (F12) or the BIOS boot order. os-prober is deliberately NOT installed and
-# no Windows entry is ever generated; the Windows disk is never read or written.
+# Windows on one NVMe SSD, Arch on the other, each with its own ESP and
+# bootloader. The disks stay independent: this GRUB menu is Arch-only, switching
+# OS is done in the firmware boot menu (F12), and the Windows disk is never
+# read, mounted or written (no os-prober).
 
 # Assignment must precede `readonly` (the reverse aborts on every run), and
 # keeping it separate stops `readonly` from masking a failing $(...) under -e.
@@ -43,16 +35,10 @@ ROOT_PART=""
 
 HOSTNAME="archlinux"
 
-# Hardcoded credentials: no prompts, set via chpasswd. The user and root share
-# the password, which sits here in plaintext.
+# Hardcoded and set via chpasswd: user and root share this plaintext password.
 readonly USERNAME="peng"
 readonly USER_PASSWORD="0000"
 
-# -----------------------------------------------------------------------------
-# Colored console output
-# -----------------------------------------------------------------------------
-# Decided once at startup, before init_logging() redirects stdout into the log
-# tee: real tty + usable TERM + no NO_COLOR. The log copy is stripped on exit.
 USE_COLOR=0
 C_RESET=$'\e[0m'
 C_BOLD=$'\e[1m'
@@ -69,9 +55,6 @@ setup_color() {
     fi
 }
 
-# -----------------------------------------------------------------------------
-# Logging
-# -----------------------------------------------------------------------------
 log() {
     local level="$1" tag
     shift
@@ -94,7 +77,6 @@ warn() { log "WARN" "$@"; }
 die()  { log "FAIL" "$@" >&2; exit 1; }
 
 strip_log_colors() {
-    # Strip ANSI SGR sequences so the log file stays plain and greppable.
     sed -i 's/\x1b\[[0-9;]*m//g' "$LOG_FILE" 2>/dev/null || true
 }
 
@@ -107,9 +89,6 @@ init_logging() {
     trap strip_log_colors EXIT
 }
 
-# -----------------------------------------------------------------------------
-# Error handling
-# -----------------------------------------------------------------------------
 on_error() {
     local exit_code=$?
     if (( USE_COLOR )); then
@@ -141,9 +120,6 @@ on_interrupt() {
 trap on_error ERR
 trap on_interrupt INT
 
-# -----------------------------------------------------------------------------
-# Version
-# -----------------------------------------------------------------------------
 get_version() {
     if command -v git >/dev/null 2>&1 \
         && git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -156,9 +132,6 @@ get_version() {
     fi
 }
 
-# -----------------------------------------------------------------------------
-# Environment checks
-# -----------------------------------------------------------------------------
 require_command() {
     local command_name="$1"
     command -v "$command_name" >/dev/null 2>&1 \
@@ -166,7 +139,7 @@ require_command() {
 }
 
 check_commands() {
-    # Live-ISO tools only; chroot-only tools (grub-install) come from pacstrap.
+    # Live-ISO tools only: grub-install comes from pacstrap into the chroot.
     local commands=(
         curl date sleep tee timedatectl uname lsblk findmnt od blkid wipefs
         sgdisk partprobe mkfs.fat mkfs.btrfs btrfs
@@ -220,8 +193,6 @@ check_uefi() {
 }
 
 check_secure_boot() {
-    # Arch's GRUB is unsigned, so warn early: Secure Boot must be disabled in
-    # the BIOS before the first boot (this does not affect the Windows install).
     local efivar="/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
     local state
     if [[ ! -r "$efivar" ]]; then
@@ -284,9 +255,6 @@ check_time() {
     warn "Installation may continue, but package verification can fail if the clock is incorrect."
 }
 
-# -----------------------------------------------------------------------------
-# Mirror configuration
-# -----------------------------------------------------------------------------
 write_mirrorlist() { # write_mirrorlist URL...
     local url
     {
@@ -307,7 +275,6 @@ setup_mirrors() {
         cp -a "$MIRRORLIST" "${MIRRORLIST}.iso-backup"
     fi
 
-    # Write the fixed list as declared: nothing is probed, nothing is dropped.
     write_mirrorlist "${MIRROR_URLS[@]}"
 
     # pacstrap does not sync itself, and the ISO's databases can be stale
@@ -320,12 +287,8 @@ setup_mirrors() {
     ok "Country: $MIRROR_COUNTRY (${#MIRROR_URLS[@]} fixed mirrors, primary: ${MIRROR_URLS[0]})"
 }
 
-# -----------------------------------------------------------------------------
-# Disk selection
-# -----------------------------------------------------------------------------
 get_live_device() {
-    # Block devices hosting the running ISO: airootfs (loop/overlay) and, for
-    # removable media, bootmnt (the real USB partition).
+    # Devices hosting the running ISO: airootfs (loop/overlay) + bootmnt (USB).
     local mount_point source
     for mount_point in /run/archiso/airootfs /run/archiso/bootmnt; do
         source="$( findmnt \
@@ -354,12 +317,8 @@ list_disks() {
 }
 
 list_signatures() {
-    # Read-only inventory of what survives on the disk: sgdisk --zap-all
-    # rewrites the table but leaves old filesystems, swap headers and RAID/LVM
-    # metadata behind. This is the last chance to spot a wrong disk, and stale
-    # signatures (a leftover mkswap header makes mount see type "swap") have to
-    # be wiped later. wipefs --no-act writes nothing; the disk's own tables
-    # (gpt/PMBR/dos) are filtered out.
+    # Read-only inventory before the wipe: the last chance to spot a wrong disk.
+    # wipefs --no-act writes nothing; the disk's own tables are filtered out.
     local device line
     local found=0
     local devices=()
@@ -463,11 +422,7 @@ confirm_disk() {
     ok "Disk confirmed."
 }
 
-# -----------------------------------------------------------------------------
-# Partitioning
-# -----------------------------------------------------------------------------
 cleanup_disk_state() {
-    # Drop leftovers from a previous (possibly failed) run.
     if mountpoint -q /mnt 2>/dev/null; then
         warn "Unmounting leftover mounts under /mnt from a previous run..."
         umount -R /mnt 2>/dev/null || true
@@ -475,7 +430,6 @@ cleanup_disk_state() {
 }
 
 assert_disk_unused() {
-    # Refuse to repartition a disk whose partitions are still mounted/used.
     local used
     used="$( { lsblk -no MOUNTPOINTS "$TARGET_DISK" 2>/dev/null || true; } \
         | awk 'NF' \
@@ -494,15 +448,13 @@ get_partition_name() {
     fi
 }
 
-# Signature types wipefs reports for the given devices, one per line.
 signature_types() {
     wipefs \
         --no-act --noheadings --output TYPE "$@" 2>/dev/null \
         | awk 'NF' || true
 }
 
-# True when wipefs reports this type. Membership, not equality: one filesystem
-# can emit the same TYPE several times (a fresh FAT32 yields three "vfat").
+# Membership, not equality: a fresh FAT32 reports "vfat" three times.
 has_signature() {
     local expected="$1"
     shift
@@ -547,16 +499,15 @@ partition_disk() {
         die "Partition nodes did not appear: $EFI_PART $ROOT_PART"
     fi
 
-    # Erase old signatures explicitly: libblkid probes swap before btrfs, so a
-    # stale mkswap header on the new root would hijack mount's detection.
-    # No --force: that would also erase the disk's own backup GPT.
+    # Erase stale signatures first: libblkid probes swap before btrfs, so a
+    # leftover mkswap header would hijack mount. No --force: keeps backup GPT.
     wipefs --all "$EFI_PART" "$ROOT_PART"
 
     mkfs.fat -F32 "$EFI_PART"
     mkfs.btrfs -f "$ROOT_PART"
 
-    # Verify with wipefs (blkid reports nothing once a device carries several
-    # signatures) and fail loudly rather than mount something unexpected.
+    # Verify with wipefs: blkid stays silent once a device carries several
+    # signatures. Fail loudly rather than mount something unexpected.
     local signatures
     if ! has_signature "btrfs" "$ROOT_PART"; then
         die "No btrfs signature on $ROOT_PART after mkfs: $( signature_types "$ROOT_PART" )"
@@ -577,35 +528,26 @@ partition_disk() {
     ok "Partitioning completed."
 }
 
-# -----------------------------------------------------------------------------
-# Filesystem mounting (FIXED ORDER: mount @ first, then mkdir, then mount others)
-# -----------------------------------------------------------------------------
+# Order is load-bearing: mount @ first, mkdir inside it, then mount the rest.
 mount_filesystems() {
     info "Mounting filesystems..."
     local btrfs_opts="noatime,compress=zstd:3,discard=async"
 
-    # Step 1: temporary mount, create @ and @home (no /.snapshots: snapshot-ready
-    # only). Always pass -t: autodetection can pick a stale signature's type.
+    # -t is required: autodetection can pick up a stale signature's type.
     mount -t btrfs "$ROOT_PART" /mnt
     btrfs subvolume create /mnt/@
     btrfs subvolume create /mnt/@home
     sync
     umount /mnt
 
-    # Step 2: mount @ as root.
     mount -t btrfs -o "$btrfs_opts",subvol=@ "$ROOT_PART" /mnt
 
-    # Step 3: mount-point dirs inside @. -p is required: @ is empty, so /mnt/boot
-    # does not exist yet.
+    # -p is required: @ is empty, so /mnt/boot does not exist yet.
     mkdir -p /mnt/home /mnt/boot/efi
 
-    # Step 4: mount @home.
     mount -t btrfs -o "$btrfs_opts",subvol=@home "$ROOT_PART" /mnt/home
-
-    # Step 5: mount the ESP.
     mount -t vfat -o umask=0077 "$EFI_PART" /mnt/boot/efi
 
-    # Step 6: verify all mount points.
     mountpoint -q /mnt             || die "Root filesystem mount failed."
     mountpoint -q /mnt/home        || die "Home filesystem mount failed."
     mountpoint -q /mnt/boot/efi    || die "EFI filesystem mount failed."
@@ -613,9 +555,6 @@ mount_filesystems() {
     ok "Filesystems mounted."
 }
 
-# -----------------------------------------------------------------------------
-# Base system installation
-# -----------------------------------------------------------------------------
 get_microcode_package() {
     local vendor
     vendor="$( awk -F ': ' '/vendor_id/ {print $2; exit}' /proc/cpuinfo )"
@@ -632,7 +571,7 @@ install_base_system() {
     local microcode=""
     microcode="$(get_microcode_package || true)"
 
-    # i915 + mesa come from linux-firmware and the kernel; no dGPU driver here.
+    # No dGPU driver: i915 + mesa come from the kernel and linux-firmware.
     local packages=(
         base linux linux-firmware
         btrfs-progs
@@ -666,20 +605,15 @@ generate_fstab() {
     ok "fstab generated."
 }
 
-# -----------------------------------------------------------------------------
-# System configuration
-# -----------------------------------------------------------------------------
 configure_system() {
     info "Configuring installed system..."
 
     arch-chroot /mnt /bin/bash <<EOF
 set -e
 
-# timezone
 ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 hwclock --systohc
 
-# locale
 sed -i \
     -e 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' \
     -e 's/^#zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' \
@@ -687,20 +621,17 @@ sed -i \
 locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
-# hostname
 echo "$HOSTNAME" > /etc/hostname
 
-# hosts
 cat > /etc/hosts <<HOSTS
 127.0.0.1 localhost
 ::1 localhost
 127.0.1.1 $HOSTNAME.localdomain $HOSTNAME
 HOSTS
 
-# enable network
 systemctl enable NetworkManager
 
-# Enable time synchronization (NetworkManager does not sync the clock itself)
+# NetworkManager does not sync the clock itself.
 systemctl enable systemd-timesyncd
 EOF
     ok "Basic system configuration completed."
@@ -715,7 +646,7 @@ create_user() {
         -s /bin/bash \
         "$USERNAME"
 
-    # Passwords go in on stdin: no prompt, nothing visible in the process list.
+    # stdin, not argv: no prompt, nothing visible in the process list.
     printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" \
         | arch-chroot /mnt chpasswd \
         || die "Failed to set the password for $USERNAME."
@@ -730,21 +661,10 @@ create_user() {
     ok "User created: $USERNAME (password set for $USERNAME and root)."
 }
 
-# -----------------------------------------------------------------------------
-# Snapshots: intentionally NOT configured
-# -----------------------------------------------------------------------------
-# Snapper/grub-btrfs are NOT set up. The layout (@, @home) is snapshot-ready,
-# but /.snapshots is deliberately absent: `snapper create-config` creates that
-# subvolume itself and fails when the directory already exists. To enable later:
-#   pacman -S snapper grub-btrfs inotify-tools
-#   snapper --no-dbus -c root create-config / && chmod 750 /.snapshots
-#   systemctl enable --now snapper-timeline.timer snapper-cleanup.timer
-#   systemctl enable --now grub-btrfsd.service
-#   grub-mkconfig -o /boot/grub/grub.cfg
+# Snapshots: not configured. The layout (@, @home) is snapshot-ready, but
+# /.snapshots must not pre-exist - `snapper create-config` creates the subvolume
+# itself and fails when the directory is already there. Recipe: see the README.
 
-# -----------------------------------------------------------------------------
-# Bootloader
-# -----------------------------------------------------------------------------
 install_grub() {
     info "Installing GRUB bootloader..."
 
@@ -756,8 +676,8 @@ install_grub() {
             --bootloader-id=Arch \
             --recheck
 
-        # Arch only: os-prober is not installed and GRUB_DISABLE_OS_PROBER is
-        # left at its default, so this menu never gains a Windows entry.
+        # Arch-only menu: no os-prober is installed and GRUB_DISABLE_OS_PROBER
+        # is left untouched.
         grub-mkconfig -o /boot/grub/grub.cfg
     '
     ok "GRUB installation completed."
@@ -799,11 +719,8 @@ Remove the installation media, then reboot.
 EOF
 }
 
-# -----------------------------------------------------------------------------
-# Main
-# -----------------------------------------------------------------------------
 main() {
-    # Decide color while stdout is still the terminal (init_logging redirects).
+    # Colors first: init_logging redirects stdout away from the terminal.
     setup_color
     init_logging
 
