@@ -48,7 +48,7 @@ arch-install/
 │
 ├── stages/                         # 系统安装各阶段（仅 install.sh 调用，ISO 内运行）
 │   ├── 00-preflight.sh             #   环境检查（root/archiso/arch/uefi/secureboot/网络/时间）
-│   ├── 10-mirrors.sh               #   固定中国镜像列表 + 可用性探测
+│   ├── 10-mirrors.sh               #   写死的中国镜像列表原样写入（无探测）
 │   ├── 20-disk.sh                  #   列盘 / 选盘 / 校验 / 二次确认
 │   ├── 30-partition.sh             #   GPT 分区（1G ESP + Btrfs root）+ 格式化
 │   ├── 40-mount.sh                 #   btrfs 子卷 @、@home 创建与挂载
@@ -181,7 +181,7 @@ lib 之间不循环依赖，加载顺序固定：`log → error → config → u
 | ---- | ---- |
 | `setup_color` `init_logging` `log`/`info`/`ok`/`warn`/`die` `on_error` `on_interrupt` `get_version` | `lib/log.sh`、`lib/error.sh` |
 | `require_command` `check_root` `check_archiso` `check_architecture` `check_uefi` `check_secure_boot` `check_network` `check_time` | `lib/check.sh` + `stages/00-preflight.sh` |
-| `write_mirrorlist` `mirror_is_reachable` `setup_mirrors` | `stages/10-mirrors.sh` |
+| `write_mirrorlist` `setup_mirrors` | `stages/10-mirrors.sh` |
 | `get_live_device` `list_disks` `validate_disk` `is_live_device` `select_disk` `confirm_disk` | `lib/disk.sh` + `stages/20-disk.sh` |
 | `cleanup_disk_state` `assert_disk_unused` `get_partition_name` `partition_disk` | `lib/disk.sh` + `stages/30-partition.sh` |
 | `mount_filesystems` | `stages/40-mount.sh` |

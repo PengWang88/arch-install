@@ -40,7 +40,7 @@
 目标：行为与现在的 `install.sh` **完全等价**，只是拆成 stages。
 
 - [ ] `stages/00-preflight.sh` — 环境检查（含 Secure Boot 警告文案，保持原话术）
-- [ ] `stages/10-mirrors.sh` — 写入固定的中国镜像列表并按序探测可用性（无 reflector；全部不可达才失败）
+- [ ] `stages/10-mirrors.sh` — 把写死的中国镜像列表原样写入（无 reflector、无探测筛选；数组第一条为 primary）
 - [ ] `stages/20-disk.sh` — 列盘（路径/容量/型号/序列号）→ 选盘 → 校验 → 布局预览 → 输入 `YES`
 - [ ] `stages/30-partition.sh` — `sgdisk --zap-all` → 1G ESP(ef00) + Btrfs root(8300) → `partprobe` → 等待分区节点 → `mkfs`
 - [ ] `stages/40-mount.sh` — 严格顺序：临时挂载 → 建 `@`/`@home` → 卸载 → 挂 `@` → `mkdir` → 挂 `@home` → 挂 ESP(umask=0077) → 校验

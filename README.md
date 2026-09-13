@@ -17,7 +17,7 @@
 
 * 支持 UEFI 启动模式
 * 自动检测 Arch Linux 安装环境
-* 自动配置 pacman 镜像源：写入固定的中国镜像列表（不再调用 reflector 做联网测速排序），按序探测并自动剔除不可达的源
+* 自动配置 pacman 镜像源：把固定的中国镜像列表**原样写死**（不调用 reflector、不做联网测速排序、探测和筛选）
 * GPT 分区方案，全部落在**目标盘**上：
   * 1 GiB EFI 分区
   * Btrfs 根分区（占剩余全部空间）
@@ -77,7 +77,7 @@ mirrors.ustc.edu.cn → mirrors.aliyun.com → mirrors.nju.edu.cn
 → mirrors.cernet.edu.cn → mirrors.tuna.tsinghua.edu.cn
 ```
 
-安装时脚本会逐个请求 `core/os/x86_64/core.db` 探测可用性，只把能正常响应的源写入 `/etc/pacman.d/mirrorlist`（原文件备份为 `mirrorlist.iso-backup`）。因此某个源被网络屏蔽（例如返回 403）时会自动跳过，而不是让整个安装失败。想增删或调整优先级，直接改这个数组即可。
+安装时脚本**不做任何探测或筛选**，直接把数组里的全部条目按顺序写进 `/etc/pacman.d/mirrorlist`（原文件备份为 `mirrorlist.iso-backup`），第一条即为 primary。因此每次安装得到的 mirrorlist 完全一致、可预期；代价是若某个源在你的网络下不可用，需要自己改这个数组（脚本不会自动跳过它）。想增删或调整优先级，直接改这个数组即可。
 
 ---
 
