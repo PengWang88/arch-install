@@ -36,8 +36,8 @@
 
 * **不安装任何独立显卡驱动**：系统使用内核自带的 Intel 核显驱动（i915）+ `linux-firmware`。RTX 独显不会被驱动，保持空闲不耗电；需要时见 [安装独显驱动](#安装独显驱动可选)
 * Alder Lake 声卡固件：`sof-firmware` + `alsa-ucm-conf`（已有）
-* Intel 无线/蓝牙：`linux-firmware` + `bluez`（已有）
-* TLP 电源管理（已有）
+* Intel 无线网卡：`linux-firmware`（已有）
+* **不安装蓝牙栈**（`bluez`/`bluez-utils`）**与笔记本电源管理**（`tlp`）：两者都不再随脚本安装，需要时自行 `pacman -S` 并 `systemctl enable`
 
 ### Btrfs 文件系统布局
 
@@ -51,7 +51,7 @@
 
 ### 系统配置
 
-自动完成：时区（Asia/Shanghai）、Locale、主机名、用户创建、sudo、NetworkManager、systemd-timesyncd、蓝牙、TLP。**不修改 GRUB 内核参数**（保留发行版默认的 `loglevel=3 quiet`）。
+自动完成：时区（Asia/Shanghai）、Locale、主机名、用户创建、sudo、NetworkManager、systemd-timesyncd。**不安装蓝牙与 TLP 电源管理**，也**不修改 GRUB 内核参数**（保留发行版默认的 `loglevel=3 quiet`）。
 
 ### 安装日志 / 彩色进度
 
@@ -169,7 +169,7 @@ chmod +x install.sh
 
 ## 🔧 安装后的系统组件与常用操作
 
-脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager、Bluetooth、TLP。**不安装任何独立显卡驱动，也不安装/配置 Snapper 与 grub-btrfs。**
+脚本会自动配置：Linux Kernel、GRUB、os-prober（Windows 入口）、NetworkManager。**不安装任何独立显卡驱动、蓝牙（bluez）与 TLP 电源管理，也不安装/配置 Snapper 与 grub-btrfs。**
 
 ```bash
 # 如果 GRUB 菜单里没有 Windows 入口，重新生成一次

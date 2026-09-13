@@ -694,10 +694,9 @@ install_base_system() {
         grub efibootmgr os-prober
         ntfs-3g
         networkmanager
-        bluez bluez-utils
         pipewire pipewire-pulse wireplumber mesa
         git sudo vim base-devel
-        tlp xf86-input-libinput
+        xf86-input-libinput
         sof-firmware alsa-ucm-conf
     )
 
@@ -758,13 +757,6 @@ systemctl enable NetworkManager
 
 # Enable time synchronization (NetworkManager does not sync the clock itself)
 systemctl enable systemd-timesyncd
-
-# Enable Bluetooth service
-systemctl enable bluetooth
-
-# Enable laptop power management
-systemctl enable tlp
-systemctl mask systemd-rfkill.service systemd-rfkill.socket 2>/dev/null || true
 EOF
     ok "Basic system configuration completed."
 }
