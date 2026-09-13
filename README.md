@@ -135,7 +135,7 @@ chmod +x install.sh
 
 * 磁盘选择——脚本会打印所有磁盘（路径/容量/型号/序列号），**由你对照确认哪块是装 Arch 的盘**（例如 `/dev/nvme0n1`）；输入盘符后会再显示一次该盘现状与将要创建的分区布局，要求输入 `YES` 确认
 * ⚠️ 脚本不识别盘上是否有 Windows，**选错盘 = 该盘数据全部丢失**。拿不准就先在 Live 环境执行 `lsblk -o NAME,SIZE,MODEL,FSTYPE` 自己核对
-* 用户名 / 密码
+* 用户名 / 密码——**已写死不提示**：用户名 `peng`，用户与 root 共用同一个密码，由 `chpasswd` 非交互写入。要改就改 `install.sh` 顶部的 `USERNAME` / `USER_PASSWORD`
 * 是否把 Arch 设为第一启动项
 
 ### 4. 安装完成后重启

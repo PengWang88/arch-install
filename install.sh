@@ -48,7 +48,15 @@ EFI_PART=""
 ROOT_PART=""
 
 HOSTNAME="archlinux"
-USERNAME=""
+
+# Fixed credentials. This installer always creates the same account, so the
+# username and password are hardcoded instead of prompted, and the passwords
+# are written non-interactively with chpasswd (no passwd prompt at all).
+# The user account and root share the same password.
+# NOTE: the password below sits in plaintext in this repository; change it here
+# if that is a problem for you.
+readonly USERNAME="peng"
+readonly USER_PASSWORD="0000"
 
 # -----------------------------------------------------------------------------
 # Colored console output
@@ -762,10 +770,7 @@ EOF
 }
 
 create_user() {
-    read -rp "Username: " USERNAME
-    if [[ -z "$USERNAME" ]]; then
-        die "Username cannot be empty."
-    fi
+    info "Creating user: $USERNAME"
 
     arch-chroot /mnt useradd \
         -m \
@@ -773,24 +778,20 @@ create_user() {
         -s /bin/bash \
         "$USERNAME"
 
-    printf '\n'
-    printf '=====================================\n'
-    printf 'Set password for user: %s\n' "$USERNAME"
-    printf '=====================================\n'
-    printf '\n'
-    arch-chroot /mnt passwd "$USERNAME"
+    # Passwords are fed to chpasswd on stdin, so they never show up as command
+    # arguments in the process list, and the install never waits on a prompt.
+    printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" \
+        | arch-chroot /mnt chpasswd \
+        || die "Failed to set the password for $USERNAME."
+    printf 'root:%s\n' "$USER_PASSWORD" \
+        | arch-chroot /mnt chpasswd \
+        || die "Failed to set the root password."
 
     sed -i \
         's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' \
         /mnt/etc/sudoers
 
-    printf '\n'
-    printf '=====================================\n'
-    printf 'Set password for root user\n'
-    printf '=====================================\n'
-    printf '\n'
-    arch-chroot /mnt passwd root
-    ok "User created."
+    ok "User created: $USERNAME (password set for $USERNAME and root)."
 }
 
 # -----------------------------------------------------------------------------
