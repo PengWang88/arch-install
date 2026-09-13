@@ -56,7 +56,7 @@ arch-install/
 │   ├── 60-fstab.sh                 #   genfstab
 │   ├── 70-system-config.sh         #   chroot：时区/locale/hostname/hosts/服务启用
 │   ├── 80-user.sh                  #   用户创建、密码、sudoers
-│   ├── 90-bootloader.sh            #   GRUB 安装、os-prober、UEFI 启动顺序
+│   ├── 90-bootloader.sh            #   GRUB 安装、os-prober
 │   └── 99-finish.sh                #   同步、卸载、安装总结与后续提示
 │
 ├── components/                     # 组件（仅 setup.sh 调用，装好的系统内运行）
@@ -189,7 +189,7 @@ lib 之间不循环依赖，加载顺序固定：`log → error → config → u
 | `generate_fstab` | `stages/60-fstab.sh` |
 | `configure_system` | `stages/70-system-config.sh` |
 | `create_user` | `stages/80-user.sh` |
-| `install_grub` `reorder_boot_entries` | `stages/90-bootloader.sh` |
+| `install_grub` | `stages/90-bootloader.sh` |
 | `finish_installation` | `stages/99-finish.sh` |
 | `main` | `install.sh`（调度器） |
 

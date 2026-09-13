@@ -48,7 +48,7 @@
 - [ ] `stages/60-fstab.sh` — `genfstab -U` 并回显
 - [ ] `stages/70-system-config.sh` — chroot 内时区/locale/hostname/hosts/NetworkManager/timesyncd/bluetooth/tlp
 - [ ] `stages/80-user.sh` — 建用户（wheel + bash）→ 用户密码 → sudoers → root 密码
-- [ ] `stages/90-bootloader.sh` — GRUB 安装（`--bootloader-id=Arch`）+ `GRUB_DISABLE_OS_PROBER` 开关 + `grub-mkconfig` + 可选启动顺序重排
+- [ ] `stages/90-bootloader.sh` — GRUB 安装（`--bootloader-id=Arch`）+ 固定启用 os-prober + `grub-mkconfig`（不改固件启动顺序）
 - [ ] `stages/99-finish.sh` — sync / `umount -R` / 总结（含双系统与 Windows 时钟偏移提示）
 - [ ] 每个 stage 支持单独重跑：`./install.sh --from 30-partition`
 - [ ] 回归验证：VM 里跑一次完整安装，与原脚本行为逐项比对

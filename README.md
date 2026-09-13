@@ -27,10 +27,10 @@
 ### 双系统 / 双硬盘支持
 
 * 目标盘与 Windows 盘完全隔离：只在目标盘创建 ESP 并安装 GRUB
-* os-prober 自动把 **Windows Boot Manager** 加进 Arch 的 GRUB 菜单（可选关闭，见下方开关）
+* os-prober 自动把 **Windows Boot Manager** 加进 Arch 的 GRUB 菜单（**写死启用**，没有开关）
 * Secure Boot 状态检测与提示（GRUB 未签名，开启时需在 BIOS 关闭）
 * 选盘前打印全量磁盘列表（路径/容量/型号/序列号），选错盘的风险由人工承担——脚本不识别 Windows 分区
-* 装完可选把 Arch 设为第一启动项（也可保持 F12 手动选盘）
+* 装完不会改固件启动顺序（脚本不碰 `efibootmgr -o`）：默认进哪个系统由 BIOS 里的启动顺序决定，可在 BIOS 里把 `Arch` 调到第一，或每次开机按 F12 选盘
 
 ### Y9000P 2022 硬件适配
 
@@ -59,13 +59,9 @@
 
 ---
 
-## 🔧 可调开关（环境变量，均有默认值）
+## 🔧 镜像源与 os-prober（均已写死）
 
-| 变量 | 默认 | 说明 |
-| ---- | ---- | ---- |
-| `ENABLE_OS_PROBER` | `1` | 在 Arch GRUB 菜单里加入 Windows 入口。`0` = 完全独立，只靠 F12 选盘 |
-
-示例：`ENABLE_OS_PROBER=0 ./install.sh`
+`install.sh` 目前**没有任何环境变量开关**：镜像列表和 os-prober 都写死在脚本里，同一份脚本每次装出来的结果完全一致。要改就改脚本顶部对应的常量 / 数组。
 
 ### 关于镜像源
 
@@ -136,14 +132,15 @@ chmod +x install.sh
 * 磁盘选择——脚本会打印所有磁盘（路径/容量/型号/序列号），**由你对照确认哪块是装 Arch 的盘**（例如 `/dev/nvme0n1`）；输入盘符后会再显示一次该盘现状与将要创建的分区布局，要求输入 `YES` 确认
 * ⚠️ 脚本不识别盘上是否有 Windows，**选错盘 = 该盘数据全部丢失**。拿不准就先在 Live 环境执行 `lsblk -o NAME,SIZE,MODEL,FSTYPE` 自己核对
 * 用户名 / 密码——**已写死不提示**：用户名 `peng`，用户与 root 共用同一个密码，由 `chpasswd` 非交互写入。要改就改 `install.sh` 顶部的 `USERNAME` / `USER_PASSWORD`
-* 是否把 Arch 设为第一启动项
+
+这是最后一步交互，之后脚本自动装完并打印后续说明。
 
 ### 4. 安装完成后重启
 
 移除安装 U 盘后重启：
 
-* 若选择了「Arch 设为第一启动项」→ 直接进 GRUB，菜单里有 Arch 和 Windows Boot Manager
-* 否则按 **F12** 选盘：`Arch` 进 Arch，`Windows Boot Manager` 进 Windows
+* 开机按 **F12** 选盘：`Arch` 进 Arch GRUB（菜单里有 Arch 和 Windows Boot Manager），`Windows Boot Manager` 直接进 Windows
+* 想默认进 Arch：在 BIOS 启动顺序里把 `Arch` 调到 `Windows Boot Manager` 前面（脚本不改固件启动顺序）
 
 ---
 
@@ -303,7 +300,14 @@ BIOS 存储模式处于 VMD/RST，需切到 AHCI（切换步骤见上，先让 W
 
 ### 想让两块盘完全独立、不用 GRUB 菜单选 Windows？
 
-`ENABLE_OS_PROBER=0 ./install.sh`，之后只用 F12 选盘即可。
+脚本已经把 os-prober 写死启用，没有开关。若确实不想在 GRUB 里看到 Windows 入口，装完后自行在 Arch 里执行：
+
+```bash
+sudo sed -i 's|^#\?GRUB_DISABLE_OS_PROBER=.*|GRUB_DISABLE_OS_PROBER=true|' /etc/default/grub
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+```
+
+之后只用 F12 选盘即可。
 
 ### 是否支持 BIOS Legacy 启动？
 
