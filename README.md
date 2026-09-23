@@ -231,18 +231,46 @@ sudo snapper rollback <编号>              # 回滚
 
 ---
 
+## 🧩 组件脚本 `setup.sh`（装好系统后运行）
+
+`install.sh` 只装「能开机、能联网」的最小系统。其余改动（例如给 GRUB 加 Windows 引导项）走独立组件脚本，由 `setup.sh` 总控按需执行。只在**已安装并已启动的 Arch** 上、以 root 运行：
+
+```bash
+sudo ./setup.sh                                # 交互式菜单：选编号运行，a=全部，q=退出
+sudo ./setup.sh --list                         # 列出全部组件与运行状态
+sudo ./setup.sh --run windows-entry            # 直接运行某个组件
+sudo ./setup.sh --run windows-entry --force    # 已跑过时强制重跑
+```
+
+组件约定（详见 [`components/_TEMPLATE.sh`](components/_TEMPLATE.sh)）：
+
+* 文件放在 `components/`，命名 `NN-id.sh`，`NN` 两位序号决定菜单顺序
+* 文件头用注释声明元数据：`# name:` 显示名、`# desc:` 说明、`# rerun: safe|warn|unsafe` 重跑策略
+* 每个组件都是可独立执行、幂等的普通脚本；放入新文件即自动出现在菜单与 `--list` 里
+* 运行状态记在 `/var/lib/arch-install/state/<id>.done`；重跑已运行的组件时会给出警告（`unsafe` 需输入 `YES`）
+* 每次运行的日志写到 `/var/log/arch-install/<时间戳>.log`
+
+---
+
 ## 📁 项目结构
 
-**当前**（单文件版本，可正常使用）：
+**当前**（可正常使用）：
 
 ```
 arch-install
-├── install.sh              # 自动安装脚本（双硬盘双系统适配）
+├── install.sh              # 入口①：系统安装脚本（Arch ISO 环境，root）
+├── setup.sh                # 入口②：组件总控（已装好的系统，交互菜单）
+├── components/             # 组件脚本，按 NN-id.sh 命名，放入即自动发现
+│   ├── 10-windows-entry.sh #   在 GRUB 里生成 Windows 引导项（os-prober）
+│   └── _TEMPLATE.sh        #   新组件模板
 ├── README.md               # 使用说明
 └── docs/
     ├── ARCHITECTURE.md     # 重构后的目标架构设计
     └── ROADMAP.md          # 实现清单（分阶段 + 组件清单）
 ```
+
+> `setup.sh` 目前是轻量版总控：自动发现 `components/NN-id.sh`、交互菜单、记录运行状态、重跑警告。
+> 完整的分类目录（`00-base/`…`60-apps/`）与 110 个组件仍在按 [`docs/ROADMAP.md`](docs/ROADMAP.md) 推进。
 
 **目标结构**（重构进行中）：项目将拆成 **系统安装脚本 + 组件/软件安装脚本** 两层：
 
@@ -283,7 +311,9 @@ arch-install
 
 ### 会动我的 Windows 盘吗？
 
-不会。脚本只分区/格式化**所选目标盘**，Windows 盘连 ESP 都不会被写入，也不会被挂载或读取（不安装 os-prober，也不做任何跨盘探测）。唯一的风险是**手动选错盘**——脚本不识别盘上内容，选盘时请务必自己核对（这是你唯一需要小心的地方）。
+不会。`install.sh` 只分区/格式化**所选目标盘**，Windows 盘连 ESP 都不会被写入，也不会被挂载或读取（不安装 os-prober，也不做任何跨盘探测）。唯一的风险是**手动选错盘**——脚本不识别盘上内容，选盘时请务必自己核对（这是你唯一需要小心的地方）。
+
+> 例外：装好系统后你**手动**运行的可选组件 `setup.sh --run windows-entry` 会只读探测 Windows ESP，以便在 GRUB 里生成 Windows 条目；它不写入 Windows 盘。
 
 ### 为什么 Arch 起不来 / "Verification failed"？
 
@@ -303,16 +333,25 @@ BIOS 存储模式处于 VMD/RST，需切到 AHCI（切换步骤见上，先让 W
 
 ### 想让 GRUB 菜单里也出现 Windows 入口？
 
-脚本刻意不装 os-prober，装完的 GRUB 里**只有 Arch**。如果确实想要一个 Windows 菜单项，装好后自己在 Arch 里加（两种方式任选）：
+`install.sh` 刻意不装 os-prober，装完的 GRUB 里**只有 Arch**。如果确实想要一个 Windows 菜单项，装好后任选一种：
 
 ```bash
-# 方式一：装 os-prober 并挂载 Windows 的 ESP（先 lsblk/blkid 确认是哪个分区）
+# 方式零（推荐）：用本仓库的组件自动完成
+sudo ./setup.sh --run windows-entry
+# 它会：装 os-prober + fuse3 → 放开 GRUB_DISABLE_OS_PROBER → 跑 grub-mkconfig → 校验条目。
+# os-prober 通过 grub-mount 只读探测，不写 Windows 盘；Arch 的内核更新不会自动重跑
+# grub-mkconfig，所以条目生成一次即长期保留。
+```
+
+```bash
+# 方式一（手动版，等价于方式零）：装 os-prober 并挂载 Windows 的 ESP（先 lsblk/blkid 确认是哪个分区）
 sudo pacman -S os-prober fuse3        # fuse3 是 grub-mount 的必需依赖，可选依赖不会自动装
 sudo mkdir -p /boot/efi-win
 sudo mount /dev/nvme1n1p1 /boot/efi-win
 sudo os-prober                        # 应输出 .../EFI/Microsoft/Boot/bootmgfw.efi:Windows Boot Manager
 sudo grub-mkconfig -o /boot/grub/grub.cfg
-# 注意：os-prober 只认已挂载的分区，每次 grub-mkconfig 前都要重新挂载，否则条目会丢
+# 装了 fuse3 后 os-prober 会用 grub-mount 自行只读挂载未挂载的分区（含 Windows ESP），
+# 所以并非必须手动 mount；手动挂载只是更直观的排错手段。
 ```
 
 ```sh
