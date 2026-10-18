@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+#
+# Arch Linux installer (UEFI x86_64, single system).
+# Run from the Arch ISO as root:  sudo ./install.sh
+# The selected disk is wiped and repartitioned: 1 GiB EFI + Btrfs root (@, @home).
+# Boot the ISO in UEFI mode with Secure Boot off; if the NVMe is missing, set
+# the BIOS storage mode to AHCI (VMD/RST hides it).
 set -Eeuo pipefail
 IFS=$'\n\t'
 
@@ -16,11 +22,6 @@ readonly MIRROR_URLS=(
     "https://mirrors.cernet.edu.cn/archlinux"
     "https://mirrors.tuna.tsinghua.edu.cn/archlinux"
 )
-
-# Windows on one NVMe SSD, Arch on the other, each with its own ESP and
-# bootloader. The disks stay independent: this GRUB menu is Arch-only, switching
-# OS is done in the firmware boot menu (F12), and the Windows disk is never
-# read, mounted or written (no os-prober).
 
 # Assignment must precede `readonly` (the reverse aborts on every run), and
 # keeping it separate stops `readonly` from masking a failing $(...) under -e.
@@ -205,7 +206,7 @@ check_secure_boot() {
             warn "Secure Boot is ENABLED."
             warn "The GRUB bootloader installed by this script is NOT signed, so the"
             warn "firmware will refuse to boot Arch unless Secure Boot is disabled in"
-            warn "the BIOS (this does not affect the existing Windows installation)."
+            warn "the BIOS."
             warn "Disable it now, or set up sbctl/shim with your own keys after boot."
             ;;
         0) ok "Secure Boot is disabled." ;;
@@ -310,9 +311,9 @@ list_disks() {
         --paths \
         --output NAME,SIZE,MODEL,SERIAL,TYPE
     printf '\n'
-    printf 'Pick the SSD that should hold Arch Linux (the other one keeps Windows).\n'
-    printf 'If one/both NVMe drives are missing here, see the README: BIOS storage\n'
-    printf 'mode (VMD/RST vs AHCI).\n'
+    printf 'Pick the disk that should hold Arch Linux.\n'
+    printf 'If the NVMe drive is missing here, set the BIOS storage mode to AHCI\n'
+    printf '(VMD/RST hides it).\n'
     printf '\n'
 }
 
@@ -576,7 +577,6 @@ install_base_system() {
         base linux linux-firmware
         btrfs-progs
         grub efibootmgr
-        ntfs-3g
         networkmanager
         pipewire pipewire-pulse wireplumber mesa
         git sudo vim base-devel
@@ -663,7 +663,7 @@ create_user() {
 
 # Snapshots: not configured. The layout (@, @home) is snapshot-ready, but
 # /.snapshots must not pre-exist - `snapper create-config` creates the subvolume
-# itself and fails when the directory is already there. Recipe: see the README.
+# itself and fails when the directory is already there.
 
 install_grub() {
     info "Installing GRUB bootloader..."
@@ -676,8 +676,6 @@ install_grub() {
             --bootloader-id=Arch \
             --recheck
 
-        # Arch-only menu: no os-prober is installed and GRUB_DISABLE_OS_PROBER
-        # is left untouched.
         grub-mkconfig -o /boot/grub/grub.cfg
     '
     ok "GRUB installation completed."
@@ -700,19 +698,7 @@ finish_installation() {
 Arch Linux installation finished.
 
 This installer only touched: $TARGET_DISK
-The Windows SSD (the other disk) was left untouched.
-
--- Dual boot (two SSDs, one OS per disk) --
-* The two disks are fully independent: this GRUB menu boots Arch only, and the
-  Windows disk is never read, mounted or written.
-* Boot into Arch:    press F12 at power-on and pick 'Arch' (or set it as the
-  first boot entry in the BIOS once, and it will boot straight into GRUB).
-* Boot into Windows: press F12 at power-on and pick 'Windows Boot Manager'.
-  Nothing else to configure: no Windows entry is added to GRUB (os-prober is
-  intentionally not installed).
-* Clock skew between Windows and Arch (an 8 h difference): run once in Windows
-  as administrator:
-      reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f
+GRUB was installed on that disk's ESP.
 
 Remove the installation media, then reboot.
 =====================================
